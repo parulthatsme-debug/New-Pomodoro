@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#102f59">
+<meta name="description" content="Physical-style clock Pomodoro with scheduled breaks, session history and study analytics.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>AIAPGET 2027 · Clock Pomodoro</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">◷</div>
+    <div><div class="eyebrow">AIAPGET 2027 · STUDY SYSTEM</div><h1>Clock <span>Pomodoro</span></h1></div>
+  </div>
+  <div class="top-right">
+    <span class="tz-chip"><span class="live-dot"></span> INDIA · GMT+05:30 (KOLKATA)</span>
+    <button class="btn btn-light btn-sm" id="exportTop">Export backup</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="hero-card">
+    <div class="clock-stage">
+      <div class="clock-shell">
+        <div class="clock-face">
+          <svg id="dialSvg" viewBox="0 0 500 500" role="img" aria-label="Analog clock hands move clockwise; the 60-minute Pomodoro progress dial moves counter-clockwise">
+            <defs>
+              <linearGradient id="faceShine" x1="0" x2="1" y1="0" y2="1">
+                <stop offset="0" stop-color="#fff"/>
+                <stop offset="1" stop-color="#edf0f3"/>
+              </linearGradient>
+              <linearGradient id="redShine" x1="0" x2="0.9" y1="0" y2="1">
+                <stop offset="0" stop-color="#d93141"/>
+                <stop offset="1" stop-color="#a90820"/>
+              </linearGradient>
+              <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+                <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#071d3c" flood-opacity=".22"/>
+              </filter>
+            </defs>
+            <circle cx="250" cy="250" r="239" fill="#d5dce5"/>
+            <circle cx="250" cy="250" r="231" fill="url(#faceShine)" stroke="#aab5c4" stroke-width="2"/>
+            <circle cx="250" cy="250" r="184" fill="none" stroke="#c4cbd4" stroke-width="2"/>
+            <circle cx="250" cy="250" r="174" fill="none" stroke="#8c99a9" stroke-width="1"/>
+            <circle cx="250" cy="250" r="174" fill="none" stroke="#e2e5e9" stroke-width="33"/>
+            <circle id="pomodoroTrack" cx="250" cy="250" r="174" fill="none" stroke="#d6dbe2" stroke-width="37"/>
+            <circle id="pomodoroProgress" cx="250" cy="250" r="174" fill="none" stroke="url(#redShine)" stroke-width="37" stroke-linecap="butt" transform="translate(500 0) scale(-1 1) rotate(-90 250 250)" stroke-dasharray="1093.27" stroke-dashoffset="1093.27"/>
+            <g id="ticks"></g>
+            <g id="labels"></g>
+            <g id="clockHands" filter="url(#softShadow)">
+              <line id="hourHand" x1="250" y1="258" x2="250" y2="158" stroke="#162332" stroke-width="11" stroke-linecap="round"/>
+              <line id="minuteHand" x1="250" y1="260" x2="250" y2="105" stroke="#17212e" stroke-width="6.5" stroke-linecap="round"/>
+              <line id="secondHand" x1="250" y1="274" x2="250" y2="88" stroke="#c31d31" stroke-width="3" stroke-linecap="round"/>
+              <circle cx="250" cy="250" r="22" fill="#303943" stroke="#f5f6f7" stroke-width="4"/>
+              <circle cx="250" cy="250" r="11" fill="#aeb8c4" stroke="#414b55" stroke-width="2"/>
+            </g>
+            <circle cx="250" cy="250" r="149" fill="none" stroke="#cfd5dc" stroke-width="1"/>
+            <text id="dialTimerText" x="250" y="348" text-anchor="middle" class="dial-timer-text" aria-label="Pomodoro countdown">60:00</text>
+          </svg>
+        </div>
+        <div class="calendar-window" aria-label="Today's date">
+          <div id="weekday" class="calendar-weekday">FRI</div>
+          <div id="month" class="calendar-month">OCT</div>
+          <div id="dayNumber" class="calendar-day">23</div>
+          <div id="year" class="calendar-year">2026</div>
+        </div>
+      </div>
+      <div class="clock-base"><span></span><span></span><span></span></div>
+      <div class="clock-caption"><span class="live-dot"></span><span id="clockStatus">REAL TIME · ASIA/KOLKATA</span></div>
+    </div>
+
+    <div class="timer-control-panel">
+      <div class="current-mode"><span class="mode-dot" id="modeDot"></span><div><div class="eyebrow" id="modeEyebrow">POMODORO SESSION</div><h2 id="modeTitle">Ready to focus?</h2></div></div>
+      <div class="timer-display" id="timerDisplay" aria-hidden="true">60:00</div>
+      <div class="timer-progress-label"><span id="timerHint">Set your duration, then start.</span><span id="elapsedLabel">0% elapsed</span></div>
+      <div class="timer-progress"><div id="timerProgress"></div></div>
+      <div class="duration-row">
+        <label for="durationMinutes">Session duration</label>
+        <div class="duration-input"><input id="durationMinutes" type="number" min="1" max="240" value="60" inputmode="numeric"><span>min</span><button class="btn btn-outline btn-sm" id="applyDuration">Apply</button></div>
+      </div>
+      <div class="timer-actions">
+        <button class="btn btn-primary" id="startPauseBtn"><span id="startPauseIcon">▶</span><span id="startPauseText">Start focus</span></button>
+        <button class="btn btn-outline" id="resetTimerBtn">↺ Reset</button>
+      </div>
+      <div class="timer-actions secondary-actions">
+        <button class="btn btn-soft" id="skipBreakBtn" hidden>End break &amp; resume</button>
+        <button class="btn btn-soft" id="stopSessionBtn">End session</button>
+      </div>
+      <div class="next-break-note" id="nextBreakNote"><span class="mini-icon">◷</span><span>No break scheduled yet.</span></div>
+    </div>
+  </section>
+
+  <section class="break-panel panel">
+    <div class="section-title"><div><span class="section-number">01</span><div><h2>Break scheduler</h2><p>Plan the time; the app handles the switch.</p></div></div><span class="status-pill" id="scheduleStatus">NOT SCHEDULED</span></div>
+    <div class="break-types">
+      <button class="break-type selected" data-break-type="short"><span class="break-icon">☕</span><span><b>Short break</b><small>15 minutes · fixed</small></span><span class="radio-mark"></span></button>
+      <button class="break-type" data-break-type="long"><span class="break-icon">☕</span><span><b>Long break</b><small>60 minutes · fixed</small></span><span class="radio-mark"></span></button>
+    </div>
+    <div class="scheduler-fields">
+      <div class="field"><label for="breakStart">Break start date &amp; time</label><input id="breakStart" type="datetime-local"></div>
+      <div class="field"><label>Fixed duration</label><div class="fixed-duration" id="fixedBreakDuration">15 min</div></div>
+    </div>
+    <div class="scheduler-buttons">
+      <button class="btn btn-primary" id="scheduleBreakBtn">Schedule break</button>
+      <button class="btn btn-outline" id="cancelBreakBtn" disabled>Cancel schedule</button>
+    </div>
+    <div class="override-note"><span>↳</span> Manual override is always available: end a break early, resume focus, or stop a session.</div>
+    <div class="scheduled-break-card" id="scheduledBreakCard" hidden></div>
+  </section>
+
+  <section class="overview-grid">
+    <div class="metric-card"><div class="metric-icon blue">◷</div><small>COMPLETED SESSIONS · TODAY</small><strong id="metricSessions">0</strong><span id="metricSessionsSub">No session completed yet</span></div>
+    <div class="metric-card"><div class="metric-icon red">◉</div><small>FOCUS TIME · TODAY</small><strong id="metricFocus">0h 0m</strong><span id="metricFocusSub">Target: 7h 0m</span></div>
+    <div class="metric-card"><div class="metric-icon amber">☕</div><small>BREAK TIME · TODAY</small><strong id="metricBreak">0h 0m</strong><span id="metricBreakSub">Short + long breaks</span></div>
+    <div class="metric-card"><div class="metric-icon green">✓</div><small>DAILY TARGET REACHED</small><strong id="metricTarget">0%</strong><span id="metricTargetSub">0 of 7 focused hours</span></div>
+  </section>
+
+  <section class="panel history-panel">
+    <div class="section-title"><div><span class="section-number">02</span><div><h2>Session history</h2><p>Know exactly when each session ran or stopped.</p></div></div><span class="status-pill" id="activeSessionBadge">NO ACTIVE SESSION</span></div>
+    <div class="active-session-strip" id="activeSessionStrip">
+      <div class="active-pulse"></div><div><small>ACTIVE / NEXT SESSION</small><strong id="activeSessionTitle">Session #1 ready</strong></div><span id="activeSessionElapsed">Not started</span>
+    </div>
+    <div class="history-toolbar">
+      <div class="field compact"><label for="historyFilter">View</label><select id="historyFilter"><option value="today">Today</option><option value="7days">Last 7 days</option><option value="30days">Last 30 days</option><option value="all">All history</option></select></div>
+      <button class="btn btn-outline btn-sm" id="exportHistory">Export session CSV</button>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>#</th><th>Session</th><th>Start</th><th>End</th><th>Focus</th><th>Result</th></tr></thead><tbody id="sessionTable"><tr><td colspan="6" class="empty-cell">Your sessions will appear here.</td></tr></tbody></table></div>
+    <div class="break-history-heading">Recent breaks</div>
+    <div id="breakHistory" class="break-history"><p class="empty-cell">Break records will appear here.</p></div>
+  </section>
+
+  <section class="panel analytics-panel">
+    <div class="section-title"><div><span class="section-number">03</span><div><h2>Performance analytics</h2><p>Planned versus actual, sessions and consistency.</p></div></div><span class="status-pill status-blue">LIVE ANALYSIS</span></div>
+    <div class="analytics-toolbar">
+      <div class="segmented" role="group" aria-label="Analysis range">
+        <button class="active" data-range="day">Daily</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button>
+      </div>
+      <div class="field compact"><label for="dailyTargetHours">Daily target</label><div class="target-input"><input id="dailyTargetHours" type="number" min="0.5" max="16" step="0.5" value="7"><span>hrs</span></div></div>
+    </div>
+    <div class="analytics-kpis">
+      <div class="analytics-kpi"><small>FOCUS TIME</small><strong id="analysisFocus">0h 0m</strong><span id="analysisFocusChange">Actual focused time</span></div>
+      <div class="analytics-kpi"><small>GOAL ACHIEVEMENT</small><strong id="analysisGoal">0%</strong><span id="analysisGoalText">Actual / target</span></div>
+      <div class="analytics-kpi"><small>SESSIONS COMPLETED</small><strong id="analysisSessions">0</strong><span id="analysisInterrupted">0 interrupted</span></div>
+      <div class="analytics-kpi"><small>PLANNED FOCUS TIME</small><strong id="analysisPlanned">0h 0m</strong><span>Based on scheduled session durations</span></div>
+    </div>
+    <div class="charts-grid">
+      <div class="chart-card"><div class="chart-title"><div><b id="focusChartTitle">Daily focus time</b><small>Minutes of actual focus</small></div><span class="chart-legend"><i class="legend-actual"></i>Actual <i class="legend-target"></i>Target</span></div><div id="focusChart" class="chart-area"></div></div>
+      <div class="chart-card"><div class="chart-title"><div><b>Sessions by result</b><small>Completed vs interrupted</small></div></div><div id="resultChart" class="donut-wrap"></div></div>
+    </div>
+    <div class="analysis-summary" id="analysisSummary"><b>Today's review</b><p>Start a session to build your first report.</p></div>
+  </section>
+
+  <section class="panel backup-panel">
+    <div class="section-title"><div><span class="section-number">04</span><div><h2>Cloud backup &amp; data safety</h2><p>Local auto-save always on; optional Google Drive sync.</p></div></div><span class="status-pill status-green" id="saveBadge">AUTO-SAVED</span></div>
+    <div class="backup-grid">
+      <div class="backup-box">
+        <div class="backup-box-head"><div class="drive-icon">G</div><div><b>Google Drive backup</b><small id="driveStatus">Not connected</small></div></div>
+        <p>Connect with a Google OAuth Client ID. The app requests Drive file access only; no Google password or client secret is stored in this repository.</p>
+        <div class="field"><label for="googleClientId">Google OAuth Client ID</label><input id="googleClientId" type="text" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off"></div>
+        <div class="drive-actions"><button class="btn btn-primary" id="connectDriveBtn">Connect Google Drive</button><button class="btn btn-outline" id="syncDriveBtn" disabled>Sync now</button><button class="btn btn-outline" id="restoreDriveBtn" disabled>Restore latest</button><button class="btn btn-text" id="disconnectDriveBtn" disabled>Disconnect</button></div>
+        <small class="hint">Cloud auto-sync works while the app is open and the Google access token is valid. Reconnect when it expires.</small>
+      </div>
+      <div class="backup-box">
+        <div class="backup-box-head"><div class="backup-icon">↯</div><div><b>Local data &amp; backups</b><small id="localStatus">Changes save automatically</small></div></div>
+        <p>Entries stay in this browser unless you export/import them. Automatic local snapshots provide recovery within this device/browser.</p>
+        <div class="drive-actions"><button class="btn btn-outline" id="exportJsonBtn">Download JSON backup</button><label class="btn btn-outline file-label">Restore JSON<input id="importJsonFile" type="file" accept=".json,application/json"></label></div>
+        <div class="backup-mini" id="localBackups"></div><div class="local-restore-row"><div class="field"><label for="localSnapshotSelect">Restore a local snapshot</label><select id="localSnapshotSelect"><option value="">No snapshots yet</option></select></div><button class="btn btn-outline btn-sm" id="restoreLocalBtn" disabled>Restore</button></div>
+      </div>
+    </div>
+    <div class="security-note"><span>🔒</span><div><b>Security note</b><p>The OAuth Client ID is public configuration, not a password. Never put a Google client secret, password, or private key in this app or a public GitHub repository. Drive sync is optional.</p></div></div>
+  </section>
+
+  <footer><b>AIAPGET 2027 · Physical-style Clock Pomodoro</b><p>India time · Asia/Kolkata · Keep focus intentional, breaks restorative.</p><small>Offline-ready after first successful online load. Browser/Android background restrictions may delay alarms while the page is closed.</small></footer>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="app.js"></script>
+</body>
+</html>
