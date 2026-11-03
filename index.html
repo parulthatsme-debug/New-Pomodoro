@@ -3,18 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#102f59">
-<meta name="description" content="Physical-style clock Pomodoro with scheduled breaks, session history and study analytics.">
+<meta name="theme-color" content="#173f35">
+<meta name="description" content="POMO Clock: private physical-style Pomodoro timer with encrypted cloud sync, scheduled breaks and study analytics.">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<title>AIAPGET 2027 · Clock Pomodoro</title>
+<title>POMO Clock · Focus & Breaks</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="auth-locked">
+<div id="authGate" class="auth-gate" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <div class="auth-card">
+    <div class="auth-brand-mark">◷</div>
+    <div class="eyebrow">PRIVATE STUDY TIMER</div>
+    <h1 id="authTitle">POMO <span>Clock</span></h1>
+    <p class="auth-lead">Sign in with your authorized Google account to continue.</p>
+    <button id="googleSignInBtn" class="btn btn-primary auth-main-btn">Continue with Google</button>
+    <div id="authMessage" class="auth-message" role="status" aria-live="polite">Only the owner account is permitted.</div>
+    <div id="passphrasePanel" class="passphrase-panel" hidden>
+      <div class="auth-divider"></div>
+      <h2 id="passphraseTitle">Unlock your private data</h2>
+      <p id="passphraseHelp">Enter your POMO Clock encryption password. It is never sent to Google or stored by the app.</p>
+      <label for="appPassphrase">POMO Clock password</label>
+      <input id="appPassphrase" type="password" autocomplete="current-password" minlength="12" placeholder="At least 12 characters">
+      <div id="confirmPassphraseWrap" hidden><label for="confirmPassphrase">Confirm password</label><input id="confirmPassphrase" type="password" autocomplete="new-password" minlength="12" placeholder="Enter it again"></div>
+      <button id="unlockBtn" class="btn btn-primary auth-main-btn">Unlock POMO Clock</button>
+    </div>
+    <button id="signOutBtn" class="btn btn-text auth-signout" hidden>Sign out</button>
+    <small class="auth-footnote">Your session records are encrypted before cloud storage. Keep your password safe: it cannot be recovered by Google or the app.</small>
+  </div>
+</div>
 <header class="topbar">
   <div class="brand">
     <div class="brand-mark">◷</div>
-    <div><div class="eyebrow">AIAPGET 2027 · STUDY SYSTEM</div><h1>Clock <span>Pomodoro</span></h1></div>
+    <div><div class="eyebrow">PRIVATE STUDY TIMER</div><h1>POMO <span>Clock</span></h1></div>
   </div>
   <div class="top-right">
     <span class="tz-chip"><span class="live-dot"></span> INDIA · GMT+05:30 (KOLKATA)</span>
@@ -81,6 +102,10 @@
         <label for="durationMinutes">Session duration</label>
         <div class="duration-input"><input id="durationMinutes" type="number" min="1" max="240" value="60" inputmode="numeric"><span>min</span><button class="btn btn-outline btn-sm" id="applyDuration">Apply</button></div>
       </div>
+      <div class="break-elapsed-panel" id="breakElapsedPanel" aria-live="polite">
+        <div class="break-elapsed-label"><span>BREAK ELAPSED</span><strong id="breakElapsedLabel">Not active</strong></div>
+        <div class="break-elapsed-track"><div id="breakElapsedProgress"></div></div>
+      </div>
       <div class="timer-actions">
         <button class="btn btn-primary" id="startPauseBtn"><span id="startPauseIcon">▶</span><span id="startPauseText">Start focus</span></button>
         <button class="btn btn-outline" id="resetTimerBtn">↺ Reset</button>
@@ -127,7 +152,7 @@
       <div class="field compact"><label for="historyFilter">View</label><select id="historyFilter"><option value="today">Today</option><option value="7days">Last 7 days</option><option value="30days">Last 30 days</option><option value="all">All history</option></select></div>
       <button class="btn btn-outline btn-sm" id="exportHistory">Export session CSV</button>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>#</th><th>Session</th><th>Start</th><th>End</th><th>Focus</th><th>Result</th></tr></thead><tbody id="sessionTable"><tr><td colspan="6" class="empty-cell">Your sessions will appear here.</td></tr></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>#</th><th>Session</th><th>Start</th><th>End</th><th>Session pause</th><th>Focus</th><th>Result</th></tr></thead><tbody id="sessionTable"><tr><td colspan="7" class="empty-cell">Your sessions will appear here.</td></tr></tbody></table></div>
     <div class="break-history-heading">Recent breaks</div>
     <div id="breakHistory" class="break-history"><p class="empty-cell">Break records will appear here.</p></div>
   </section>
@@ -158,10 +183,10 @@
     <div class="backup-grid">
       <div class="backup-box">
         <div class="backup-box-head"><div class="drive-icon">G</div><div><b>Google Drive backup</b><small id="driveStatus">Not connected</small></div></div>
-        <p>Connect with a Google OAuth Client ID. The app requests Drive file access only; no Google password or client secret is stored in this repository.</p>
+        <p>Backups are encrypted with your POMO Clock password (AES-GCM) before upload. Drive access uses a limited file permission; no Google password or client secret is stored in this repository.</p>
         <div class="field"><label for="googleClientId">Google OAuth Client ID</label><input id="googleClientId" type="text" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off"></div>
         <div class="drive-actions"><button class="btn btn-primary" id="connectDriveBtn">Connect Google Drive</button><button class="btn btn-outline" id="syncDriveBtn" disabled>Sync now</button><button class="btn btn-outline" id="restoreDriveBtn" disabled>Restore latest</button><button class="btn btn-text" id="disconnectDriveBtn" disabled>Disconnect</button></div>
-        <small class="hint">Cloud auto-sync works while the app is open and the Google access token is valid. Reconnect when it expires.</small>
+        <small class="hint">Encrypted cloud sync works while the app is open and the Google access token is valid. Reconnect when it expires. Your encryption password is never uploaded.</small>
       </div>
       <div class="backup-box">
         <div class="backup-box-head"><div class="backup-icon">↯</div><div><b>Local data &amp; backups</b><small id="localStatus">Changes save automatically</small></div></div>
@@ -170,12 +195,16 @@
         <div class="backup-mini" id="localBackups"></div><div class="local-restore-row"><div class="field"><label for="localSnapshotSelect">Restore a local snapshot</label><select id="localSnapshotSelect"><option value="">No snapshots yet</option></select></div><button class="btn btn-outline btn-sm" id="restoreLocalBtn" disabled>Restore</button></div>
       </div>
     </div>
-    <div class="security-note"><span>🔒</span><div><b>Security note</b><p>The OAuth Client ID is public configuration, not a password. Never put a Google client secret, password, or private key in this app or a public GitHub repository. Drive sync is optional.</p></div></div>
+    <div class="security-note"><span>🔒</span><div><b>Security note</b><p>Firebase client config and OAuth Client ID are public identifiers. Never put a Google client secret, password, service-account key, or private key in this app or a public GitHub repository. Cloud records and Drive backups are encrypted in the browser before upload.</p></div></div>
   </section>
 
-  <footer><b>AIAPGET 2027 · Physical-style Clock Pomodoro</b><p>India time · Asia/Kolkata · Keep focus intentional, breaks restorative.</p><small>Offline-ready after first successful online load. Browser/Android background restrictions may delay alarms while the page is closed.</small></footer>
+  <footer><b>POMO Clock · Physical-style Pomodoro</b><p>India time · Asia/Kolkata · Keep focus intentional, breaks restorative.</p><small>Offline-ready after first successful online load. Browser/Android background restrictions may delay alarms while the page is closed.</small></footer>
 </main>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="app.js"></script>
 </body>

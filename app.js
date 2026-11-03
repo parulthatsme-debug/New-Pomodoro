@@ -3,12 +3,14 @@
 const $ = id => document.getElementById(id);
 const TZ = "Asia/Kolkata";
 const DB_KEY = "aiapget-clock-pomodoro-v1";
+const LOCAL_ENC_KEY = "pomo-clock-encrypted-local-v1";
 const CLIENT_KEY = "aiapget-clock-drive-client-id-v1";
 const DUR_KEY = "aiapget-clock-last-duration-v2";
 const BREAK_DURS = {short:15,long:60};
 const CIRC = 2 * Math.PI * 174;
 let db = null, breakType = "short", analyticsRange = "day", driveToken = null, tokenClient = null;
-let lastSavedHash = "", tickHandle = null, cloudTimer = null;
+let lastSavedHash = "", tickHandle = null, cloudTimer = null, localEncryptWriteSeq = 0;
+let firebaseApp = null, firebaseAuth = null, firestore = null, authUser = null, encryptionKey = null, encryptionSalt = null, cloudReady = false, cloudSyncTimer = null;
 let alarmContext = null;
 const fmtDateKey = d => new Intl.DateTimeFormat("en-CA",{timeZone:TZ,year:"numeric",month:"2-digit",day:"2-digit"}).format(d);
 function nowMs(){ return Date.now(); }
@@ -47,6 +49,7 @@ function mmss(ms) {
   return `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
 }
 function safeNum(v, def=0){const n=Number(v);return Number.isFinite(n)?n:def}
+function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
 function blankDb() {
  return {version:1,sessions:[],breaks:[],timer:{state:"idle",duration:60,remainingMs:60*60000,startedAt:null,deadline:null,sessionId:null,elapsedBefore:0},breakSchedule:null,breakState:null,dailyTargetHours:7,logs:[],backupSnapshots:[],lastLocalBackupDate:null,createdAt:nowMs(),updatedAt:nowMs()};
 }
@@ -69,7 +72,13 @@ function persist({cloud=true}={}) {
  localSnapshot();
  const serial=serialize();
  try {
-   localStorage.setItem(DB_KEY,serial);
+   if(encryptionKey && encryptionSalt){
+     const snapshot=JSON.parse(serial);
+     saveEncryptedLocal(snapshot).catch(err=>{console.error("Encrypted local save failed",err);toast("Encrypted local save failed. Export a backup when possible.");});
+   } else if(!authUser) {
+     // Legacy local records are retained until the owner creates/unlocks encryption.
+     localStorage.setItem(DB_KEY,serial);
+   }
    lastSavedHash=serial;
    $("saveBadge").textContent="AUTO-SAVED";
    $("localStatus").textContent="Last saved "+fmtClock(nowMs());
@@ -81,7 +90,7 @@ function persist({cloud=true}={}) {
  }
  updateLocalBackupList();
  renderTopMetrics(); renderHistory(); renderAnalytics();
- if(cloud) queueDriveSync();
+ if(cloud) { queueCloudSync(); queueDriveSync(); }
 }
 function toast(msg) {const el=$("toast");el.textContent=msg;el.classList.add("show");clearTimeout(window.__toast);window.__toast=setTimeout(()=>el.classList.remove("show"),2600);}
 function buildDial() {
@@ -152,12 +161,19 @@ function updateTimerView() {
  const dialPct=Math.min(1,Math.max(0,dialElapsedMs/(60*60000)));
  setDialProgress(dialPct);$("timerProgress").style.width=(Math.min(1,Math.max(0,pct))*100)+"%";$("elapsedLabel").textContent=Math.round(Math.min(1,Math.max(0,pct))*100)+"% elapsed";$("timerHint").textContent=hint;
  const isFocus=t.state==="running",isPaused=t.state==="paused",isBreak=t.state==="break";
+ const lastSession=db.sessions.slice().sort((a,b)=>b.startAt-a.startAt)[0];
+ const focusStage=isFocus?"running":(lastSession?.status==="completed"?"complete":"inactive");
+ $("modeDot").className="mode-dot "+focusStage;
+ $("timerProgress").className=focusStage;
+ const breakPanel=$("breakElapsedPanel"),breakBar=$("breakElapsedProgress");
+ if(isBreak&&db.breakState){const b=db.breakState, total=Math.max(1,b.endAt-b.startAt), elapsed=Math.max(0,Math.min(total,now-b.startAt));breakPanel.classList.add("active");$("breakElapsedLabel").textContent=`${mmss(elapsed)} elapsed · ${Math.round(elapsed/total*100)}%` ;breakBar.style.width=(elapsed/total*100)+"%";}else{breakPanel.classList.remove("active");$("breakElapsedLabel").textContent="Not active";breakBar.style.width="0%";}
  $("startPauseText").textContent=isFocus?"Pause focus":isPaused?"Resume focus":isBreak?"Focus is on break":"Start focus";
  $("startPauseIcon").textContent=isFocus?"Ⅱ":isPaused?"▶":isBreak?"☕":"▶";
  $("startPauseBtn").disabled=isBreak;
  $("modeTitle").textContent=isFocus?"Focus in progress":isPaused?"Session paused":isBreak?"Rest & recharge":"Ready to focus?";
  $("modeEyebrow").textContent=isBreak?"SCHEDULED BREAK":isPaused?"POMODORO PAUSED":"POMODORO SESSION";
- $("modeDot").className="mode-dot "+(isFocus?"focus":isBreak?"break":"");
+ // Status colour is stage-based: idle red, active focus mustard, completed green.
+
  $("clockStatus").textContent=isFocus?"REAL CLOCK · POMODORO RUNNING":isBreak?"REAL CLOCK · BREAK RUNNING":"REAL TIME · ASIA/KOLKATA";
  $("skipBreakBtn").hidden=!isBreak;$("stopSessionBtn").disabled=!(isFocus||isPaused);
  const s=getActiveSession();
@@ -181,7 +197,7 @@ function startFocus(durationArg=null, automatic=false) {
  const duration=Math.max(1,Math.min(240,Math.round(durationArg||safeNum($("durationMinutes").value,60))));
  $("durationMinutes").value=duration;localStorage.setItem(DUR_KEY,String(duration));
  const start=nowMs(), id=newId(), number=db.sessions.length?Math.max(...db.sessions.map(s=>s.number||0))+1:1;
- const sess={id,number,startAt:start,plannedEndAt:start+duration*60000,actualEndAt:null,plannedMinutes:duration,actualMinutes:0,activeDurationMs:0,lastSegmentStartAt:start,status:"running",endReason:null,autoStarted:!!automatic};
+ const sess={id,number,name:`Session #${number}`,startAt:start,plannedEndAt:start+duration*60000,actualEndAt:null,plannedMinutes:duration,actualMinutes:0,activeDurationMs:0,pauseDurationMs:0,pausedAt:null,lastSegmentStartAt:start,status:"running",endReason:null,autoStarted:!!automatic};
  db.sessions.push(sess);
  Object.assign(t,{state:"running",duration,remainingMs:duration*60000,startedAt:start,deadline:start+duration*60000,sessionId:id,elapsedBefore:0});
  persist(); updateTimerView();toast(automatic?"Break finished · focus resumed":"Pomodoro started");
@@ -190,6 +206,8 @@ function finalizeSession(status,reason,endAt=nowMs()) {
  const t=db.timer, s=getActiveSession(); if(!s)return;
  s.actualEndAt=endAt;
  const activeMs=(s.activeDurationMs||0)+(t.state==="running"&&t.startedAt?Math.max(0,endAt-t.startedAt):0);
+ if(t.state==="paused"&&s.pausedAt) s.pauseDurationMs=(s.pauseDurationMs||0)+Math.max(0,endAt-s.pausedAt);
+ s.pausedAt=null;
  s.activeDurationMs=activeMs;s.actualMinutes=Math.max(0,activeMs/60000);
  s.status=status;s.endReason=reason;
  s.elapsedBefore=s.actualMinutes*60000;
@@ -206,7 +224,7 @@ function pauseFocus() {
  const s=getActiveSession();if(s){s.activeDurationMs=(s.activeDurationMs||0)+Math.max(0,now-(s.lastSegmentStartAt||s.startAt));s.status="paused";s.pausedAt=now;}
  persist();updateTimerView();toast("Focus paused");
 }
-function resumeFocus(){const t=db.timer;if(t.state!=="paused")return;const now=nowMs(),s=getActiveSession();t.state="running";t.startedAt=now;t.deadline=now+t.remainingMs;if(s){s.status="running";s.resumedAt=now;s.lastSegmentStartAt=now;s.plannedEndAt=t.deadline;}persist();updateTimerView();toast("Focus resumed");}
+function resumeFocus(){const t=db.timer;if(t.state!=="paused")return;const now=nowMs(),s=getActiveSession();t.state="running";t.startedAt=now;t.deadline=now+t.remainingMs;if(s){if(s.pausedAt){s.pauseDurationMs=(s.pauseDurationMs||0)+Math.max(0,now-s.pausedAt);s.pausedAt=null;}s.status="running";s.resumedAt=now;s.lastSegmentStartAt=now;s.plannedEndAt=t.deadline;}persist();updateTimerView();toast("Focus resumed");}
 function cancelCurrentSession() {if(db.timer.state!=="running"&&db.timer.state!=="paused")return;finishSession("interrupted","Manual stop");}
 function startBreak(type, startAt=nowMs(), scheduled=false) {
  const existing=db.breakState;if(existing)return;
@@ -274,6 +292,10 @@ function rangeStartEnd(range, ref=new Date()){
  const monthKey=new Intl.DateTimeFormat("en-CA",{timeZone:TZ,year:"numeric",month:"2-digit"}).format(ref);
  return {start:indiaInputToMs(monthKey+"-01T00:00"),end:ref.getTime()};
 }
+function sessionPauseMs(s, now=nowMs()) {
+ const saved=Math.max(0,Number(s.pauseDurationMs||0));
+ return saved+(s.status==="paused"&&s.pausedAt?Math.max(0,now-s.pausedAt):0);
+}
 function sessionFocusMs(s, now=nowMs()) {
  if(s.actualEndAt!==null&&s.actualEndAt!==undefined) return Math.max(0,(s.activeDurationMs??(Number(s.actualMinutes||0)*60000)));
  if(s.status==="running"&&db.timer.sessionId===s.id&&db.timer.state==="running") return Math.max(0,(s.activeDurationMs||0)+now-(db.timer.startedAt||now));
@@ -311,8 +333,9 @@ function renderHistory(){
  let start=0;if(filter==="today")start=indiaInputToMs(fmtDateKey(new Date())+"T00:00");else if(filter==="7days")start=now-7*86400000;else if(filter==="30days")start=now-30*86400000;
  const list=db.sessions.filter(s=>s.startAt>=start).slice().sort((a,b)=>b.startAt-a.startAt);
  const tbody=$("sessionTable");
- if(!list.length)tbody.innerHTML='<tr><td colspan="6" class="empty-cell">No sessions in this range yet.</td></tr>';
- else tbody.innerHTML=list.map(s=>`<tr><td>${s.number||"—"}</td><td><strong>Session #${s.number||"—"}</strong>${s.autoStarted?' <small>auto</small>':""}</td><td>${fmtClock(s.startAt)}</td><td>${s.actualEndAt?fmtClock(s.actualEndAt):s.status==="running"?"Running":s.status==="paused"?"Paused":"—"}</td><td>${fmtDuration(sessionFocusMs(s)/60000)}</td><td><span class="result-pill ${s.status==="completed"?"result-completed":s.status==="interrupted"?"result-interrupted":"result-paused"}">${s.status==="completed"?"Completed":s.status==="interrupted"?"Interrupted":s.status==="running"?"Running":"Paused"}</span></td></tr>`).join("");
+ if(!list.length)tbody.innerHTML='<tr><td colspan="7" class="empty-cell">No sessions in this range yet.</td></tr>';
+ else tbody.innerHTML=list.map(s=>`<tr><td>${s.number||"—"}</td><td><button class="session-name-edit" type="button" data-rename-session="${s.id}" title="Rename this session">${escapeHtml(s.name||`Session #${s.number||"—"}`)} <span aria-hidden="true">✎</span></button>${s.autoStarted?' <small>auto</small>':""}</td><td>${fmtClock(s.startAt)}</td><td>${s.actualEndAt?fmtClock(s.actualEndAt):s.status==="running"?"Running":s.status==="paused"?"Paused":"—"}</td><td>${fmtDuration(sessionPauseMs(s)/60000)}</td><td>${fmtDuration(sessionFocusMs(s)/60000)}</td><td><span class="result-pill ${s.status==="completed"?"result-completed":s.status==="interrupted"?"result-interrupted":"result-paused"}">${s.status==="completed"?"Completed":s.status==="interrupted"?"Interrupted":s.status==="running"?"Running":"Paused"}</span></td></tr>`).join("");
+ tbody.querySelectorAll("[data-rename-session]").forEach(btn=>btn.addEventListener("click",()=>{const session=db.sessions.find(x=>x.id===btn.dataset.renameSession);if(!session)return;const value=prompt("Enter a name for this session:",session.name||`Session #${session.number}`);if(value===null)return;const name=value.trim().slice(0,80);if(!name){toast("Session name cannot be empty.");return;}session.name=name;persist();renderHistory();toast("Session renamed");}));
  const breakList=db.breaks.filter(b=>b.startAt>=start).slice().sort((a,b)=>b.startAt-a.startAt).slice(0,6);
  $("breakHistory").innerHTML=breakList.length?breakList.map(b=>`<div class="break-history-item"><div><b>${b.type==="short"?"Short":"Long"} break</b><span>${fmtStamp(b.startAt)}${b.endAt?" – "+fmtClock(b.actualEndAt||b.endAt):""}</span></div><strong>${fmtDuration((b.actualEndAt||now)-b.startAt>0?((b.actualEndAt||now)-b.startAt)/60000:0)}</strong></div>`).join(""):'<p class="empty-cell">Break records will appear here.</p>';
 }
@@ -360,15 +383,15 @@ function updateLocalBackupList(){
  root.innerHTML=list.length?`<b>${list.length} local snapshot(s) available</b><br><span>Stored only in this browser.</span>`:"Daily local snapshot will appear here.";
 }
 function exportJson(){
- const blob=new Blob([JSON.stringify({app:"AIAPGET Clock Pomodoro",version:1,exportedAt:nowMs(),data:db},null,2)],{type:"application/json"});
- download(`AIAPGET-Clock-Pomodoro-${fmtDateKey(new Date())}.json`,blob);toast("JSON backup downloaded");
+ const blob=new Blob([JSON.stringify({app:"POMO Clock",version:1,exportedAt:nowMs(),data:db},null,2)],{type:"application/json"});
+ download(`POMO-Clock-${fmtDateKey(new Date())}.json`,blob);toast("JSON backup downloaded");
 }
 function download(name,blob){const a=document.createElement("a"),url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
 function exportCsv(){
- const rows=[["Session #","Start India","End India","Planned minutes","Actual minutes","Status","End reason","Auto-started"]];
- db.sessions.slice().sort((a,b)=>a.startAt-b.startAt).forEach(s=>rows.push([s.number,fmtStamp(s.startAt),s.actualEndAt?fmtStamp(s.actualEndAt):"",s.plannedMinutes,s.actualMinutes||0,s.status,s.endReason||"",s.autoStarted?"yes":"no"]));
+ const rows=[["Session #","Session name","Start India","End India","Planned minutes","Session pause minutes","Actual focus minutes","Status","End reason","Auto-started"]];
+ db.sessions.slice().sort((a,b)=>a.startAt-b.startAt).forEach(s=>rows.push([s.number,s.name||`Session #${s.number}`,fmtStamp(s.startAt),s.actualEndAt?fmtStamp(s.actualEndAt):"",s.plannedMinutes,Math.round(sessionPauseMs(s)/60000*10)/10,Math.round(sessionFocusMs(s)/60000*10)/10,s.status,s.endReason||"",s.autoStarted?"yes":"no"]));
  const csv=rows.map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
- download("AIAPGET-Pomodoro-Sessions.csv",new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));toast("Session CSV exported");
+ download("POMO-Clock-Sessions.csv",new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));toast("Session CSV exported");
 }
 function importJsonFile(file){
  const reader=new FileReader();reader.onload=()=>{try{const p=JSON.parse(reader.result),next=p.data||p.entries||p;if(!next||!Array.isArray(next.sessions))throw new Error("Invalid backup");if(!confirm("Restore this backup? It will replace the current local diary data."))return;db={...blankDb(),...next,timer:{...blankDb().timer,...next.timer}};persist({cloud:false});hydrateInputs();renderAll();toast("Backup restored");}catch(e){toast("Could not read this backup file.");}};reader.readAsText(file);
@@ -401,6 +424,149 @@ function doTick(){
  if(db.timer.state==="running"&&db.timer.deadline&&nowMs()>=db.timer.deadline)finishSession("completed","Timer completed",db.timer.deadline);
  if(db.timer.state==="break"&&db.breakState&&nowMs()>=db.breakState.endAt)finishBreak();
  updateTimerView();
+}
+const OWNER_EMAIL = "drparuls580@gmail.com";
+const CLOUD_FORMAT = "pomo-clock-encrypted-v1";
+function authMessage(message, kind="") {
+ const el=$("authMessage"); if(!el)return; el.textContent=message; el.className="auth-message"+(kind?" "+kind:"");
+}
+function showPassphrasePanel(isNew) {
+ $("passphrasePanel").hidden=false;
+ $("confirmPassphraseWrap").hidden=!isNew;
+ $("passphraseTitle").textContent=isNew?"Create your POMO Clock password":"Unlock your private data";
+ $("passphraseHelp").textContent=isNew
+  ?"Create a strong password of at least 12 characters. It encrypts your private records before cloud backup. It cannot be recovered if forgotten."
+  :"Enter the password you created for POMO Clock. Your encrypted records cannot be decrypted without it.";
+ $("unlockBtn").textContent=isNew?"Create password & secure data":"Unlock POMO Clock";
+ $("appPassphrase").value="";$("confirmPassphrase").value="";$("appPassphrase").focus();
+ $("passphrasePanel").dataset.mode=isNew?"create":"unlock";
+}
+function bytesToB64(bytes){let binary="";new Uint8Array(bytes).forEach(b=>binary+=String.fromCharCode(b));return btoa(binary);}
+function b64ToBytes(value){const binary=atob(value);return Uint8Array.from(binary,c=>c.charCodeAt(0));}
+async function deriveEncryptionKey(passphrase,saltBytes){
+ const material=await crypto.subtle.importKey("raw",new TextEncoder().encode(passphrase),"PBKDF2",false,["deriveKey"]);
+ return crypto.subtle.deriveKey({name:"PBKDF2",salt:saltBytes,iterations:310000,hash:"SHA-256"},material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function encryptData(data){
+ if(!encryptionKey||!encryptionSalt)throw new Error("POMO Clock is locked");
+ const iv=crypto.getRandomValues(new Uint8Array(12));
+ const plain=new TextEncoder().encode(JSON.stringify(data));
+ const cipher=await crypto.subtle.encrypt({name:"AES-GCM",iv},encryptionKey,plain);
+ return {format:CLOUD_FORMAT,salt:bytesToB64(encryptionSalt),iv:bytesToB64(iv),ciphertext:bytesToB64(cipher),updatedAt:Date.now(),owner:OWNER_EMAIL};
+}
+async function decryptData(envelope){
+ if(!encryptionKey)throw new Error("Encryption key is unavailable");
+ if(!envelope||envelope.format!==CLOUD_FORMAT||!envelope.iv||!envelope.ciphertext)throw new Error("This is not a supported encrypted POMO Clock backup");
+ const plain=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64ToBytes(envelope.iv)},encryptionKey,b64ToBytes(envelope.ciphertext));
+ return JSON.parse(new TextDecoder().decode(plain));
+}
+async function saveEncryptedLocal(data){
+ const seq=++localEncryptWriteSeq;
+ const envelope=await encryptData(data);
+ if(seq!==localEncryptWriteSeq)return;
+ localStorage.setItem(LOCAL_ENC_KEY,JSON.stringify(envelope));
+ localStorage.removeItem(DB_KEY);
+}
+function firebaseConfigured(){
+ const c=window.POMO_FIREBASE_CONFIG;
+ return !!(window.firebase&&c&&c.apiKey&&c.apiKey!=="PASTE_API_KEY_HERE"&&c.appId&&c.appId!=="PASTE_APP_ID_HERE"&&c.projectId);
+}
+function lockApp(){
+ cloudReady=false;encryptionKey=null;encryptionSalt=null;authUser=null;document.body.classList.add("auth-locked");$("authGate").hidden=false;
+ $("googleSignInBtn").hidden=false;$("passphrasePanel").hidden=true;$("signOutBtn").hidden=true;
+}
+function unlockApp(){
+ document.body.classList.remove("auth-locked");$("authGate").hidden=true;cloudReady=true;
+ $("googleSignInBtn").hidden=true;$("passphrasePanel").hidden=true;$("signOutBtn").hidden=true;
+ renderAll();toast("POMO Clock unlocked · encrypted cloud sync ready");
+}
+async function handleFirebaseUser(user){
+ if(!user){lockApp();authMessage("Sign in with the authorized Google account to continue.");return;}
+ if((user.email||"").toLowerCase()!==OWNER_EMAIL||!user.emailVerified){
+   authMessage("Access denied. Use the verified owner account only.","error");
+   await firebaseAuth.signOut();return;
+ }
+ authUser=user;$("googleSignInBtn").hidden=true;$("signOutBtn").hidden=false;
+ try{
+   const ref=firestore.collection("users").doc(user.uid).collection("privateData").doc("main");
+   const snap=await ref.get();window.__pomoCloudRef=ref;
+   if(snap.exists){
+     window.__pomoCloudEnvelope=snap.data();
+     showPassphrasePanel(false);authMessage("Owner verified. Enter your POMO Clock password to decrypt your data.","success");
+   }else{
+     window.__pomoCloudEnvelope=null;
+     const localEnvelope=localStorage.getItem(LOCAL_ENC_KEY);
+     if(localEnvelope){window.__pomoLocalEnvelope=JSON.parse(localEnvelope);showPassphrasePanel(false);$("passphrasePanel").dataset.mode="local-unlock";authMessage("Owner verified. Unlock this device's encrypted local records; they will then be secured in Firestore.","success");}
+     else {window.__pomoLocalEnvelope=null;showPassphrasePanel(true);authMessage("Owner verified. Create your private encryption password to secure this device's data.","success");}
+   }
+ }catch(err){authMessage("Could not check your private database. Check Firestore rules and try again: "+err.message,"error");}
+}
+async function initializeSecureLayer(){
+ if(!firebaseConfigured()){
+   authMessage("Firebase setup needs one final step: paste the exact Web app config into firebase-config.js, then reload.","error");
+   $("googleSignInBtn").disabled=true;return;
+ }
+ try{
+   firebaseApp=firebase.apps.length?firebase.app():firebase.initializeApp(window.POMO_FIREBASE_CONFIG);
+   firebaseAuth=firebase.auth();firestore=firebase.firestore();
+   const provider=new firebase.auth.GoogleAuthProvider();provider.setCustomParameters({prompt:"select_account"});
+   $("googleSignInBtn").addEventListener("click",async()=>{
+     try{authMessage("Opening Google sign-in…");await firebaseAuth.signInWithPopup(provider);}catch(err){authMessage("Google sign-in failed: "+err.message,"error");}
+   });
+   $("unlockBtn").addEventListener("click",completePasswordSetup);
+   $("appPassphrase").addEventListener("keydown",e=>{if(e.key==="Enter")completePasswordSetup();});
+   $("confirmPassphrase").addEventListener("keydown",e=>{if(e.key==="Enter")completePasswordSetup();});
+   $("signOutBtn").addEventListener("click",async()=>{await firebaseAuth.signOut();lockApp();});
+   firebaseAuth.onAuthStateChanged(handleFirebaseUser);
+ }catch(err){authMessage("Firebase initialization failed: "+err.message,"error");$("googleSignInBtn").disabled=true;}
+}
+async function completePasswordSetup(){
+ const pass=$("appPassphrase").value, mode=$("passphrasePanel").dataset.mode;
+ if(pass.length<12){authMessage("Use a password with at least 12 characters.","error");return;}
+ if(mode==="create"&&pass!==$("confirmPassphrase").value){authMessage("The two passwords do not match.","error");return;}
+ $("unlockBtn").disabled=true;authMessage(mode==="create"?"Encrypting your existing local records…":"Decrypting your private records…");
+ try{
+   const ref=window.__pomoCloudRef;
+   if(mode==="create"){
+     encryptionSalt=crypto.getRandomValues(new Uint8Array(16));encryptionKey=await deriveEncryptionKey(pass,encryptionSalt);
+     cloudReady=true;
+     await ref.set(await encryptData(db));
+     await saveEncryptedLocal(db);
+   }else if(mode==="local-unlock"){
+     const localEnvelope=window.__pomoLocalEnvelope;
+     encryptionSalt=b64ToBytes(localEnvelope.salt);encryptionKey=await deriveEncryptionKey(pass,encryptionSalt);
+     const localData=await decryptData(localEnvelope);
+     db={...blankDb(),...localData,timer:{...blankDb().timer,...(localData.timer||{})}};
+     cloudReady=true;await ref.set(await encryptData(db));await saveEncryptedLocal(db);
+   }else{
+     const envelope=window.__pomoCloudEnvelope;
+     encryptionSalt=b64ToBytes(envelope.salt);encryptionKey=await deriveEncryptionKey(pass,encryptionSalt);
+     const remote=await decryptData(envelope);
+     let localData=null;const localText=localStorage.getItem(LOCAL_ENC_KEY);
+     if(localText){try{localData=await decryptData(JSON.parse(localText));}catch(e){localData=null;}}
+     const localCandidate=localData||db;
+     const localHasData=(localCandidate.sessions?.length||0)+(localCandidate.breaks?.length||0)>0;
+     const remoteHasData=(remote.sessions?.length||0)+(remote.breaks?.length||0)>0;
+     if(localHasData&&(!remoteHasData||safeNum(localCandidate.updatedAt,0)>safeNum(envelope.updatedAt,0))){
+       db={...blankDb(),...localCandidate,timer:{...blankDb().timer,...(localCandidate.timer||{})}};
+       cloudReady=true;await ref.set(await encryptData(db));await saveEncryptedLocal(db);
+     }else{
+       db={...blankDb(),...remote,timer:{...blankDb().timer,...(remote.timer||{})}};
+       cloudReady=true;persist({cloud:false});hydrateInputs();
+     }
+   }
+   unlockApp();
+   if(mode==="create")toast("Private encryption password created · local records secured in Firestore");
+   else queueCloudSync();
+ }catch(err){cloudReady=false;encryptionKey=null;encryptionSalt=null;authMessage(mode==="unlock"?"Password incorrect or encrypted data could not be read. Try again.":"Could not secure your data: "+err.message,"error");}
+ finally{$("unlockBtn").disabled=false;}
+}
+function queueCloudSync(){
+ if(!cloudReady||!authUser||!window.__pomoCloudRef)return;
+ clearTimeout(cloudSyncTimer);cloudSyncTimer=setTimeout(async()=>{
+   try{await window.__pomoCloudRef.set(await encryptData(db));$("saveBadge").textContent="CLOUD-SAVED";}
+   catch(err){console.error("POMO cloud sync",err);toast("Cloud sync failed. Your local data is still saved.");}
+ },1800);
 }
 function queueDriveSync(){
  if(!driveToken)return;
@@ -444,11 +610,12 @@ async function upsertDriveJson(name,data){
 }
 async function syncDriveBackup({daily=false,quiet=false}={}) {
  if(!driveToken){if(!quiet)toast("Connect Google Drive first.");return;}
+ if(!encryptionKey){if(!quiet)toast("Unlock POMO Clock before creating encrypted backups.");return;}
  try {
-   const payload={app:"AIAPGET Physical Clock Pomodoro",version:1,exportedAt:nowMs(),data:db};
-   await upsertDriveJson("AIAPGET-Pomodoro-Latest.json",payload);
+   const payload=await encryptData(db);
+   await upsertDriveJson("POMO-Clock-Latest.enc.json",payload);
    if(daily){
-     const name=`AIAPGET-Pomodoro-Daily-${fmtDateKey(new Date())}.json`;
+     const name=`POMO-Clock-Daily-${fmtDateKey(new Date())}.json`;
      await upsertDriveJson(name,payload);
    }
    $("driveStatus").textContent="Synced · "+fmtClock(nowMs());
@@ -461,13 +628,14 @@ async function syncDriveBackup({daily=false,quiet=false}={}) {
 }
 async function restoreDriveBackup(){
  if(!driveToken){toast("Connect Google Drive first.");return;}
+ if(!encryptionKey){toast("Unlock POMO Clock before restoring encrypted backups.");return;}
  try{
-   const f=await findDriveFile("AIAPGET-Pomodoro-Latest.json");
+   const f=await findDriveFile("POMO-Clock-Latest.enc.json");
    if(!f){toast("No latest backup found in Drive yet. Sync first.");return;}
    if(!confirm("Restore the latest Google Drive backup? This will replace the current local session data. Export a JSON backup first if you need to keep both."))return;
    const payload=await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
-   const incoming=payload.data||payload.entries||payload;
-   if(!incoming||!Array.isArray(incoming.sessions))throw new Error("The Drive file is not a valid Pomodoro backup.");
+   const incoming=await decryptData(payload);
+   if(!incoming||!Array.isArray(incoming.sessions))throw new Error("The Drive file is not a valid encrypted POMO Clock backup.");
    db={...blankDb(),...incoming,timer:{...blankDb().timer,...incoming.timer}};
    persist({cloud:false});hydrateInputs();renderAll();toast("Latest Google Drive backup restored");
  }catch(e){toast("Could not restore Drive backup: "+e.message.slice(0,95));}
@@ -514,14 +682,15 @@ function initEvents(){
  $("connectDriveBtn").addEventListener("click",connectDrive);$("syncDriveBtn").addEventListener("click",()=>syncDriveBackup({daily:true}));$("restoreDriveBtn").addEventListener("click",restoreDriveBackup);$("disconnectDriveBtn").addEventListener("click",disconnectDrive);
  $("restoreLocalBtn").addEventListener("click",()=>{const idx=Number($("localSnapshotSelect").value),snap=db.backupSnapshots[idx];if(!snap||!snap.data){toast("Choose a valid snapshot.");return;}if(!confirm(`Restore local snapshot from ${snap.date}? Current data will be replaced.`))return;const history=db.backupSnapshots;db={...blankDb(),...snap.data,timer:{...blankDb().timer,...snap.data.timer},backupSnapshots:history};persist({cloud:false});hydrateInputs();renderAll();toast("Local snapshot restored");});
  $("googleClientId").value=localStorage.getItem(CLIENT_KEY)||"";
- window.addEventListener("beforeunload",()=>{if(db)persist({cloud:false});});
+ window.addEventListener("beforeunload",()=>{if(db&&cloudReady)persist({cloud:false});});
  document.addEventListener("visibilitychange",()=>{if(!document.hidden){doTick();renderAnalytics();}});
 }
 loadDb();
 const lastDur=safeNum(localStorage.getItem(DUR_KEY),60);
 if(!db.timer||!db.timer.duration)db.timer={...blankDb().timer,duration:lastDur,remainingMs:lastDur*60000};
 if(db.timer.state==="running"&&db.timer.deadline&&nowMs()>=db.timer.deadline){finalizeSession("completed","Timer completed while app was closed",db.timer.deadline);db.timer.state="idle";db.timer.sessionId=null;db.timer.deadline=null;db.timer.startedAt=null;db.timer.remainingMs=db.timer.duration*60000;}
-buildDial();hydrateInputs();initEvents();renderAll();persist({cloud:false});
-setInterval(doTick,250);
-setInterval(()=>{if(db){const day=fmtDateKey(new Date());if(db.lastLocalBackupDate!==day)persist();}},30000);
+buildDial();hydrateInputs();initEvents();renderAll();
+initializeSecureLayer();
+setInterval(()=>{if(cloudReady)doTick();},250);
+setInterval(()=>{if(db&&cloudReady){const day=fmtDateKey(new Date());if(db.lastLocalBackupDate!==day)persist();}},30000);
 })();

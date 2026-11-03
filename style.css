@@ -5,3 +5,65 @@
 /* Requested v2 refinements: the analog dial is the visual countdown; keep the right panel focused on controls. */
 .timer-display{display:none!important}
 .timer-progress-label{margin-top:22px}
+
+/* Approved v1.0 visual refresh: forest / sage palette while retaining the physical clock. */
+:root{--navy:#173f35;--navy2:#28634e;--green:#2f8b68;--blue:#3d8068;--paper:#f1f6f1;--line:#dce8df;--shadow:0 12px 32px #173f3510}
+body{background:linear-gradient(180deg,#f3f7f2 0%,#edf4ee 100%)}
+.brand-mark{background:linear-gradient(145deg,#174b3b,#2e7559)}
+.brand h1 span{color:#2c7455}
+.tz-chip{background:#edf6ef;border-color:#d6e9db;color:#285b43}
+.hero-card{background:linear-gradient(135deg,#123f34 0%,#1e604a 55%,#2d7455 100%);box-shadow:0 18px 36px #123f3422}
+.clock-stage{background:radial-gradient(ellipse at 50% 40%,#477d64 0%,#245c47 55%,#174a3a 100%)}
+.clock-shell{border-color:#0c3028;background:#123e34;box-shadow:inset 0 0 0 3px #6a9b7c,0 22px 35px #08291f45}
+.clock-shell:before{border-color:#b5d5bd99}
+.clock-base span{background:linear-gradient(#164d3a,#0b3027)}
+.calendar-window{background:linear-gradient(150deg,#f5fbf4 0%,#dcefe0 48%,#c9e4d0 100%);color:#275b43;box-shadow:inset 2px 0 4px #9cbba5,inset 0 0 0 2px #a9cdb2}
+.calendar-weekday{color:#245c43}.calendar-month{color:#397b58}.calendar-day{color:#1d6546}.calendar-year{color:#547b62}
+.mode-dot{height:14px;width:14px;background:#fa5967;box-shadow:0 0 0 6px #fa59672b,0 0 13px #fa5967aa;transition:background .2s,box-shadow .2s}
+.mode-dot.inactive{background:#fa5967;box-shadow:0 0 0 6px #fa59672b,0 0 13px #fa5967aa}
+.mode-dot.running{background:#e4b84f;box-shadow:0 0 0 6px #e4b84f2b,0 0 16px #e4b84faa}
+.mode-dot.complete{background:#4bd18b;box-shadow:0 0 0 6px #4bd18b2b,0 0 16px #4bd18bcc}
+.timer-progress{height:9px;background:#ffffff30;box-shadow:inset 0 1px 3px #092f2455}
+.timer-progress div{height:100%;background:#fa5967;box-shadow:0 0 10px #fa5967aa;transition:width .2s,background .2s,box-shadow .2s}
+.timer-progress div.inactive{background:#fa5967;box-shadow:0 0 12px #fa5967bb}
+.timer-progress div.running{background:#e4b84f;box-shadow:0 0 13px #e4b84fcc}
+.timer-progress div.complete{background:#4bd18b;box-shadow:0 0 13px #4bd18bcc}
+.break-elapsed-panel{margin-top:12px;padding:10px 12px;border:1px solid #ffffff25;border-radius:11px;background:#ffffff0b;opacity:.55;transition:opacity .2s,border-color .2s,box-shadow .2s}
+.break-elapsed-panel.active{opacity:1;border-color:#ffffffa8;box-shadow:0 0 15px #ffffff28}
+.break-elapsed-label{display:flex;justify-content:space-between;gap:10px;color:#f4fff8;font-size:9px;letter-spacing:.7px;font-weight:800;margin-bottom:7px}
+.break-elapsed-label strong{font:600 10px "DM Mono",monospace;letter-spacing:0}
+.break-elapsed-track{height:7px;background:#ffffff30;border-radius:20px;overflow:hidden}
+.break-elapsed-track div{height:100%;width:0;background:#fff;border-radius:20px;box-shadow:0 0 10px #fff,0 0 17px #ffffffbb;transition:width .2s}
+.section-number{background:#e7f2e9;color:#2c7652}
+.status-blue{background:#e9f3ec;color:#347457}
+.break-type.selected{border-color:#80b297;background:#eff7f0;box-shadow:inset 0 0 0 1px #80b297}
+.break-type.selected .radio-mark{border-color:#347a57}
+.fixed-duration,.scheduled-break-card{background:#edf6ef;color:#2b6549}
+.metric-icon.blue{background:#e8f3eb;color:#357858}
+.metric-icon.green{background:#e3f4e9;color:#238052}
+.segmented button.active{color:#246448}
+.legend-actual{background:#37845f}
+.bar-actual{background:linear-gradient(#55a77b,#26734e)}
+.analysis-summary{background:linear-gradient(120deg,#edf6ef,#f4f8f3);border-color:#dcecdf}
+.analysis-summary b{color:#286448}
+.drive-icon{background:#e9f4ec;color:#28734f}
+.session-name-edit{border:0;background:transparent;color:#244d39;font:700 11px Manrope,sans-serif;padding:0;text-align:left;white-space:nowrap}
+.session-name-edit span{opacity:.55;font-size:10px;margin-left:3px}
+.session-name-edit:hover{color:#16804e;text-decoration:underline}
+@media(max-width:700px){.break-elapsed-panel{margin-top:12px}}
+
+/* POMO Clock secure sign-in gate */
+body.auth-locked{overflow:hidden}
+.auth-gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(ellipse at 50% 0%,#e4f1e6 0%,#f0f6f0 50%,#e8f0e9 100%);overflow:auto}
+.auth-gate[hidden]{display:none}
+.auth-card{width:min(100%,430px);background:#fff;border:1px solid #dce9df;border-radius:24px;padding:32px 28px;box-shadow:0 22px 70px #173f3520;text-align:center}
+.auth-brand-mark{width:58px;height:58px;margin:0 auto 17px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(145deg,#174b3b,#2e7559);color:#fff;font-size:34px;box-shadow:0 8px 18px #174b3b33}
+.auth-card .eyebrow{color:#57816a;font-size:10px;letter-spacing:1.6px;font-weight:800}
+.auth-card h1{font-size:29px;color:#183f32;margin:8px 0 5px}.auth-card h1 span{color:#2f8b68}
+.auth-lead{font-size:13px;line-height:1.6;color:#6d7f73;margin:0 0 21px}
+.auth-main-btn{width:100%;justify-content:center;min-height:46px;font-size:13px}
+.auth-message{margin:13px 0 0;font-size:11px;line-height:1.5;color:#6e8175;min-height:17px}
+.auth-message.error{color:#b42332}.auth-message.success{color:#28734f}
+.passphrase-panel{text-align:left;margin-top:15px}.passphrase-panel h2{font-size:16px;color:#234d3a;margin:0 0 5px}.passphrase-panel p{font-size:11px;color:#718276;line-height:1.6;margin:0 0 14px}
+.passphrase-panel label{display:block;font-size:11px;font-weight:700;color:#375d48;margin:12px 0 6px}.passphrase-panel input{width:100%;height:43px;border:1px solid #cadbce;border-radius:10px;padding:0 12px;font:13px inherit;color:#234d3a;outline:none}.passphrase-panel input:focus{border-color:#438b68;box-shadow:0 0 0 3px #438b6818}.passphrase-panel .auth-main-btn{margin-top:15px}
+.auth-divider{height:1px;background:#e6eee8;margin:19px 0}.auth-signout{margin-top:9px;color:#668071}.auth-footnote{display:block;margin-top:20px;font-size:9px;line-height:1.6;color:#89978e}

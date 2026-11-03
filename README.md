@@ -1,48 +1,96 @@
-# AIAPGET 2027 · Physical-style Clock Pomodoro
+# POMO Clock — Secure Firebase Edition (setup build)
 
-Mobile-friendly, installable, client-side study timer inspired by the user's reference clock.
+A mobile-friendly physical-style Pomodoro clock with an Asia/Kolkata analog clock, counter-clockwise focus dial, scheduled breaks, editable session history, pause accounting, and daily/weekly/monthly analytics.
 
-## Included
-- Physical-style clock body, analog time hands and date/calendar panel (Asia/Kolkata).
-- Animated red Pomodoro progress ring on a 60-minute scale: elapsed minutes advance counter-clockwise, while the real clock hands move clockwise. Focus timer defaults to 60 minutes; custom durations (1–240 minutes) are supported and remembered.
-- Pause, resume, reset and manual stop.
-- Break scheduler with fixed 15-minute short break and 60-minute long break. Choose a future start time; at that time, the running focus is interrupted and break begins. When break ends, another focus session starts automatically.
-- Session history, break history, daily target (default 7 focused hours), daily/weekly/monthly KPI cards and charts.
-- Local browser autosave, once-per-day local snapshots (up to 30) with restore, JSON export/import, session CSV export.
-- Optional Google Drive backup through Google OAuth (drive.file scope).
+## Included app features
+- 60-minute default focus session; custom durations from 1–240 minutes.
+- Real clock hands move clockwise; focus progress moves counter-clockwise on a 60-minute dial.
+- Scheduled 15-minute short and 60-minute long breaks, with manual override.
+- Editable session names and separate cumulative session-pause duration; net focus excludes pauses.
+- Session and break history, daily target, analytics charts, CSV and JSON export.
+- Forest / sage-green physical-clock design and responsive mobile layout.
+- Local browser persistence and daily local snapshots.
 
-## Important persistence / timing limits
-- Local data is in the current browser's `localStorage`; it does not automatically sync across devices.
-- Daily browser snapshots live on the same device and can be lost if browser site data is cleared. Download JSON backups periodically.
-- Google Drive integration is optional. It requires a Google OAuth Web Client ID, the Google Drive API enabled, and this GitHub Pages origin added as an Authorized JavaScript origin. No client secret is used in the web app.
-- Drive OAuth access tokens are kept in page memory only. Auto-sync runs while the page is open and token remains valid; tokens expire, so you may need to reconnect. The app syncs a latest backup and one daily snapshot file in your Drive. The page also includes a Restore latest action to recover the latest Drive backup on this device.
-- A static browser app cannot reliably execute alarms while fully closed or suspended by mobile OS battery management. On reopen, state is reconciled as far as possible; scheduled timer transitions require the page to be active.
+## Security architecture
+- Firebase Authentication Google sign-in.
+- Client-side owner check for `drparuls580@gmail.com` plus a Firestore rules allowlist. The Firestore rules are the enforcement boundary; the JavaScript check alone is not security.
+- Firestore path: `users/{uid}/privateData/main`.
+- Firestore data is encrypted in the browser using AES-GCM 256-bit encryption. The key is derived from the owner's POMO Clock password using PBKDF2-SHA-256 (310,000 iterations) and a random salt.
+- The same password protects the local browser backup store and encrypted Google Drive backup payloads. The password and derived key are not uploaded or persisted by the app.
+- If the password is forgotten, encrypted cloud/local backups cannot be decrypted. Keep a safe password-manager copy.
+- Google Drive sync uses the limited `drive.file` OAuth scope. It is optional and requires a Google OAuth Web Client ID configured separately.
 
-## Publish with GitHub Pages
-1. Create a repository, e.g. `aiapget-pomodoro`.
-2. Upload these files to the repository root: `index.html`, `style.css`, `app.js`, `manifest.json`, `sw.js`, `icon.svg`, `README.md`.
-3. Commit changes to the `main` branch.
-4. Open Settings → Pages → Deploy from a branch → `main` → `/(root)` → Save.
-5. Open the GitHub Pages URL over HTTPS. Add to Android home screen via Chrome's menu → Install app / Add to Home screen.
+### Important limitations
+- GitHub Pages is a static host. Firebase Authentication and Firestore rules enforce cloud access; the frontend owner-email check is only an additional UI gate.
+- The local app UI is not a substitute for device-level security. Protect the device/browser profile and sign out on shared devices.
+- JSON export is intentionally a user-initiated plaintext export. Store exported files safely.
+- A static browser app cannot guarantee timer alarms while the page is fully closed or suspended by mobile OS battery management.
+- This is a setup build. Do not call it production-secure until Firebase config is completed, rules are published, and both allowed/denied-account tests pass.
 
-## Configure Google Drive sync
-1. Open https://console.cloud.google.com/ in the Google account that owns your Drive.
-2. Create/select a Google Cloud project.
-3. APIs & Services → Library → Enable **Google Drive API**.
-4. APIs & Services → OAuth consent screen: configure the app name and your own account as a test user if the app is in Testing mode. Do not request broad scopes.
-5. APIs & Services → Credentials → Create Credentials → OAuth client ID → Web application.
-6. Add the exact HTTPS GitHub Pages origin (e.g. `https://YOUR-USERNAME.github.io`) as an **Authorized JavaScript origin**. Do not add paths to the origin.
-7. Copy the OAuth Client ID ending in `.apps.googleusercontent.com` into this app's Google OAuth Client ID field and tap Connect Google Drive.
-8. Approve the limited `drive.file` access and tap Sync now to test. Google credentials should never be shared in chat. No client secret is required or used in the frontend.
+## 1. Complete Firebase web config
 
-## Safety
-The GitHub repository will be public if set to Public, so all source code is public. Never commit a password, refresh token, client secret, or private key. OAuth Client ID is public config but its authorized origins must be restricted to the exact site. Revoke app access at https://myaccount.google.com/connections if needed.
+1. Open Firebase Console → POMO Clock project → Project settings (gear) → General.
+2. Under **Your apps**, select the registered web app **My POMO Clock**.
+3. Find **SDK setup and configuration** and choose the `Config` option (not npm).
+4. Copy the exact `firebaseConfig` values into `firebase-config.js`, replacing `PASTE_API_KEY_HERE` and `PASTE_APP_ID_HERE`. Keep the other project values exactly as Firebase displays them.
+5. Do not copy service-account credentials, OAuth client secrets, or private keys. The Firebase web config is public client configuration.
+
+## 2. Publish Firestore security rules
+
+1. Firebase Console → Build → Firestore Database → Rules.
+2. Replace the editor contents with the complete contents of `firestore.rules` in this package.
+3. Click **Publish**.
+4. These rules allow only a verified Firebase-authenticated user whose email is exactly `drparuls580@gmail.com`, and only under that user's own UID path. All other paths are denied.
+
+Do not use test mode or `allow read, write: if true`.
+
+## 3. Authentication settings
+
+- Firebase Authentication → Sign-in method: enable Google.
+- Authentication → Settings → Authorized domains: ensure `parulthatsme-debug.github.io` is listed (the user has already added this domain).
+- The first sign-in must use the verified Google account `drparuls580@gmail.com`.
+
+## 4. GitHub Pages deployment
+
+Upload these files to the root of the existing repository `New-Pomodoro` and commit to the branch used by GitHub Pages:
+
+- `index.html`
+- `style.css`
+- `app.js`
+- `firebase-config.js`
+- `firestore.rules` (reference copy; Firebase rules are published separately in Console)
+- `manifest.json`
+- `sw.js`
+- `icon.svg`
+- `README.md`
+
+The existing site URL should remain `https://parulthatsme-debug.github.io/New-Pomodoro/`.
+
+## 5. First login and password
+
+1. Open the deployed site and sign in with `drparuls580@gmail.com`.
+2. On first use, create a strong POMO Clock password of at least 12 characters and confirm it.
+3. This password encrypts your records before they are sent to Firestore or Google Drive. It is not your Google password.
+4. Keep it in a password manager. There is no password reset that can recover encrypted records.
+
+## 6. Google Drive encrypted backup (separate setup)
+
+The app's Drive section accepts a Google OAuth Web Client ID. To use it:
+1. Enable Google Drive API in the Google Cloud project associated with your app.
+2. Create an OAuth client ID of type **Web application**.
+3. Add the exact Authorized JavaScript origin `https://parulthatsme-debug.github.io` (origin only; no repository path).
+4. Configure the OAuth consent screen and add the owner account as a test user if the app remains in Testing.
+5. Enter the OAuth Client ID in the POMO Clock Drive panel, connect Drive, then sync.
+6. Only encrypted JSON envelopes are uploaded. The encryption password/key is not uploaded.
+
+Do not enter an OAuth client secret in the app. The Drive feature is optional; Firestore sync works independently.
 
 ## Manual test checklist
-- Verify date/time fields use Asia/Kolkata, including date changes. The top badge should read India · GMT+05:30 (Kolkata).
-- Start a 60-minute focus, pause, resume, finish naturally, and inspect log. Test a shorter custom session too; the red dial should advance counter-clockwise by actual elapsed minutes (for example, about 3 minutes elapsed should point near the 03-minute position on the 60-minute dial).
-- Schedule a break a few minutes ahead and verify focus stops, break starts and then auto-starts a new focus.
-- Test manual end of session and manual early break end.
-- Switch analytics range and change daily target.
-- Export/import JSON and refresh to test local persistence.
-- Configure Google OAuth only after the site is deployed; test Drive sync with a throwaway backup first.
+- Allowed account: Google sign-in succeeds for `drparuls580@gmail.com`.
+- Denied account: sign-in with another Google account is rejected and Firestore rules deny direct access.
+- First use: create password; refresh page; sign in again; same password unlocks.
+- Wrong password: encrypted data remains unreadable and the app stays locked.
+- Local persistence: create/pause/resume/finish sessions; refresh and verify session history and pause duration.
+- Cross-device: sign in on another browser/device, unlock with the same POMO Clock password, verify Firestore records appear.
+- Drive (after OAuth setup): sync an encrypted backup and restore it using the same POMO Clock password.
+- Timer/break scheduling and analytics should be checked after the security gate is active.

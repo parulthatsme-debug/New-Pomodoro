@@ -1,12 +1,12 @@
 {
-  "name": "AIAPGET 2027 Clock Pomodoro",
-  "short_name": "Clock Pomodoro",
-  "description": "Physical-style animated clock, break scheduler and study analytics",
+  "name": "POMO Clock",
+  "short_name": "POMO Clock",
+  "description": "Private physical-style Pomodoro clock with scheduled breaks, session history and study analytics",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#f2f5f8",
-  "theme_color": "#102f59",
+  "background_color": "#f1f6f1",
+  "theme_color": "#173f35",
   "icons": [{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
 }
