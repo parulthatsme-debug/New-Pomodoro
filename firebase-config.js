@@ -4,7 +4,7 @@
  * Never add service-account credentials, OAuth client secrets, or passwords here.
  */
 window.POMO_FIREBASE_CONFIG = {
-  apiKey: "AIzaSyAkvLAvvkhjrCAPSsNQBSJfQ1Zqy70FzYA",
+  apiKey: "AIzaSyAkvlAvvkhjrCAPSsNQBSJfQ1Zqy70FzYA",
   authDomain: "pomo-clock-f650d.firebaseapp.com",
   projectId: "pomo-clock-f650d",
   storageBucket: "pomo-clock-f650d.firebasestorage.app",
