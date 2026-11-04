@@ -67,3 +67,58 @@ body.auth-locked{overflow:hidden}
 .passphrase-panel{text-align:left;margin-top:15px}.passphrase-panel h2{font-size:16px;color:#234d3a;margin:0 0 5px}.passphrase-panel p{font-size:11px;color:#718276;line-height:1.6;margin:0 0 14px}
 .passphrase-panel label{display:block;font-size:11px;font-weight:700;color:#375d48;margin:12px 0 6px}.passphrase-panel input{width:100%;height:43px;border:1px solid #cadbce;border-radius:10px;padding:0 12px;font:13px inherit;color:#234d3a;outline:none}.passphrase-panel input:focus{border-color:#438b68;box-shadow:0 0 0 3px #438b6818}.passphrase-panel .auth-main-btn{margin-top:15px}
 .auth-divider{height:1px;background:#e6eee8;margin:19px 0}.auth-signout{margin-top:9px;color:#668071}.auth-footnote{display:block;margin-top:20px;font-size:9px;line-height:1.6;color:#89978e}
+
+/* Session naming, simplified break scheduling, compact overview and analog stopwatch */
+.session-name-row{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+.session-name-row>label{font-size:10px;font-weight:800;letter-spacing:.25px;color:#d7e4dd}
+.session-name-controls{display:flex;gap:7px;min-width:0}
+.session-name-controls input{flex:1;min-width:0;height:37px;background:#ffffff12;border:1px solid #ffffff45;border-radius:9px;padding:8px 10px;color:#fff;font-size:11px;outline:none}
+.session-name-controls input::placeholder{color:#c4d5ca}
+.session-name-controls input:focus{border-color:#c4dfce;box-shadow:0 0 0 3px #d5eadb1c}
+.session-name-controls .btn{padding:8px 10px;font-size:9px}
+.break-date-note{grid-column:1/-1;color:#718477;font-size:9px;line-height:1.45;margin-top:-4px}
+.overview-grid.panel{grid-column:2;display:flex;flex-direction:column;gap:11px;padding:15px;background:linear-gradient(155deg,#fbfdfb,#f5f9f5);border-color:#dce8df;box-shadow:0 9px 24px #173f350b;min-width:0}
+.overview-heading,.stopwatch-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.overview-heading h2,.stopwatch-heading h3{margin:0;color:#244b39;font-size:14px;letter-spacing:-.25px}
+.overview-heading p,.stopwatch-heading p{margin:3px 0 0;color:#809086;font-size:9px}
+.overview-live,.stopwatch-status{border-radius:30px;padding:5px 8px;background:#e9f2eb;color:#52745d;font-size:8px;font-weight:800;letter-spacing:.55px;white-space:nowrap}
+.metric-compact-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+.metric-card.metric-compact{padding:9px 9px 8px;border:1px solid #e2ebe3;border-radius:10px;box-shadow:none;background:#fff;min-height:75px}
+.metric-compact small{font-size:7px;letter-spacing:.35px;line-height:1.3;color:#7f8c83;min-height:19px}
+.metric-compact strong{font-size:17px;line-height:1.2;margin:3px 0 2px;letter-spacing:-.5px;color:#244534}
+.metric-compact span{font-size:8px;line-height:1.3;color:#89958c;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stopwatch-panel{border:1px solid #dfe9e1;border-radius:13px;background:linear-gradient(135deg,#f7faf7,#edf4ef);padding:11px 12px;min-width:0}
+.stopwatch-content{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:12px;margin-top:7px}
+.stopwatch-clock-wrap{width:100%;max-width:150px;aspect-ratio:1;margin:auto;filter:drop-shadow(0 5px 7px #163b2912)}
+.stopwatch-clock-wrap svg{width:100%;height:100%;display:block}
+.sw-case{fill:#d5e0d8;stroke:#aebfb2;stroke-width:2}
+.sw-face{fill:#fcfdfb;stroke:#c8d6cc;stroke-width:2}
+.sw-inner-ring{fill:none;stroke:#dce6de;stroke-width:1}
+.sw-tick{stroke:#74897b;stroke-width:1.3;stroke-linecap:round}
+.sw-tick.major{stroke:#294e3a;stroke-width:2.4}
+.sw-label{font:700 8px Manrope,sans-serif;fill:#496655}
+.sw-hands line{stroke:#263e31;stroke-width:4;stroke-linecap:round}
+#swMinuteHand{stroke-width:2.7}
+#swSecondHand{stroke:#a34548;stroke-width:1.5}
+.sw-pin{fill:#315d43;stroke:#f7faf7;stroke-width:2}
+.stopwatch-details{min-width:0}
+.stopwatch-display{font:700 clamp(19px,2.1vw,25px)/1.1 "DM Mono",monospace;letter-spacing:-.8px;color:#214532;margin:0 0 8px;font-variant-numeric:tabular-nums}
+.stopwatch-controls{display:flex;flex-wrap:wrap;gap:5px}
+.stopwatch-controls .btn{padding:7px 9px;font-size:8px;min-height:28px}
+.stopwatch-controls .btn-primary{background:#285a40;color:#fff;border-color:#285a40}
+.stopwatch-controls .btn-outline{color:#3f6850;border-color:#c8d9cc;background:#fff}
+.stopwatch-controls .btn-text{color:#7c8980}
+.stopwatch-history-head{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:7px;border-top:1px solid #dce7de;color:#486452;font-size:9px}
+.stopwatch-history-head span{font-size:8px;color:#87958a;font-weight:700}
+.stopwatch-history{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:3px}
+.stopwatch-history li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px solid #e7eee8;font-size:8px;color:#65766a}
+.stopwatch-history li:last-child{border-bottom:0}
+.stopwatch-history li span{display:flex;flex-direction:column;min-width:0}
+.stopwatch-history li b{font-size:8px;color:#46614e}
+.stopwatch-history li small{font-size:7px;color:#97a197}
+.stopwatch-history li strong{font:700 9px "DM Mono",monospace;color:#314d3a;white-space:nowrap}
+.stopwatch-history .stopwatch-empty{color:#929e94;border:0;padding:8px 0}
+.stopwatch-note{display:block;margin-top:5px;color:#929e94;font-size:7px;line-height:1.35}
+@media(max-width:900px){.metric-compact-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-grid.panel{grid-column:2}.stopwatch-content{grid-template-columns:128px minmax(0,1fr)}.stopwatch-clock-wrap{max-width:128px}}
+@media(max-width:700px){.overview-grid.panel{grid-column:1;padding:14px}.metric-compact-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stopwatch-content{grid-template-columns:145px minmax(0,1fr)}.stopwatch-clock-wrap{max-width:145px}.break-date-note{grid-column:1/-1}}
+@media(max-width:420px){.stopwatch-content{grid-template-columns:1fr}.stopwatch-clock-wrap{max-width:155px}.stopwatch-details{width:100%}.stopwatch-display{text-align:center}.stopwatch-controls{justify-content:center}.stopwatch-history-head{margin-top:8px}}

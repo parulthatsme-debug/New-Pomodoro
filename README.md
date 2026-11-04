@@ -5,11 +5,11 @@ A mobile-friendly physical-style Pomodoro clock with an Asia/Kolkata analog cloc
 ## Included app features
 - 60-minute default focus session; custom durations from 1–240 minutes.
 - Real clock hands move clockwise; focus progress moves counter-clockwise on a 60-minute dial.
-- Scheduled 15-minute short and 60-minute long breaks, with manual override.
-- Editable session names and separate cumulative session-pause duration; net focus excludes pauses.
+- Scheduled 15-minute short and 60-minute long breaks. The date is automatic (Asia/Kolkata); enter only the time. A time already passed today rolls to tomorrow. Manual override remains available.
+- Session names can be entered before starting or changed while running; history also remains editable. Separate cumulative session-pause duration; net focus excludes pauses.
 - Session and break history, daily target, analytics charts, CSV and JSON export.
-- Forest / sage-green physical-clock design and responsive mobile layout.
-- Local browser persistence and daily local snapshots.
+- Forest / sage-green physical-clock design and responsive mobile layout. Compact daily metrics sit above an independent analog stopwatch.
+- Local browser persistence and daily local snapshots. The stopwatch keeps only its five most recent completed uses in browser-local temporary storage.
 
 ## Security architecture
 - Firebase Authentication Google sign-in.
@@ -94,3 +94,7 @@ Do not enter an OAuth client secret in the app. The Drive feature is optional; F
 - Cross-device: sign in on another browser/device, unlock with the same POMO Clock password, verify Firestore records appear.
 - Drive (after OAuth setup): sync an encrypted backup and restore it using the same POMO Clock password.
 - Timer/break scheduling and analytics should be checked after the security gate is active.
+- Session naming: enter a name before starting, confirm the active session shows it, rename while running, and verify the same name appears in history.
+- Break scheduler: enter a time only; confirm the date is assigned automatically in Asia/Kolkata and a past time is scheduled for the next day.
+- Sound: start/resume alerts run for about 8 seconds, completion alert for about 14 seconds, and Reset stops a currently playing alert immediately. Browser autoplay/audio policies can affect sound until the app has received user interaction.
+- Stopwatch: start, pause, resume, finish and save; confirm that the latest five uses remain visible after a page reload in the same browser. Stopwatch data is local-only and is not included in Firestore or Drive sync.

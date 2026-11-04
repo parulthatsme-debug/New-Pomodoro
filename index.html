@@ -98,6 +98,10 @@
       <div class="timer-display" id="timerDisplay" aria-hidden="true">60:00</div>
       <div class="timer-progress-label"><span id="timerHint">Set your duration, then start.</span><span id="elapsedLabel">0% elapsed</span></div>
       <div class="timer-progress"><div id="timerProgress"></div></div>
+      <div class="session-name-row">
+        <label for="sessionName">Session name</label>
+        <div class="session-name-controls"><input id="sessionName" type="text" maxlength="80" placeholder="e.g. Sushruta Samhita · Nidana Sthana"><button class="btn btn-outline btn-sm" id="saveSessionNameBtn" type="button">Save name</button></div>
+      </div>
       <div class="duration-row">
         <label for="durationMinutes">Session duration</label>
         <div class="duration-input"><input id="durationMinutes" type="number" min="1" max="240" value="60" inputmode="numeric"><span>min</span><button class="btn btn-outline btn-sm" id="applyDuration">Apply</button></div>
@@ -125,8 +129,9 @@
       <button class="break-type" data-break-type="long"><span class="break-icon">☕</span><span><b>Long break</b><small>60 minutes · fixed</small></span><span class="radio-mark"></span></button>
     </div>
     <div class="scheduler-fields">
-      <div class="field"><label for="breakStart">Break start date &amp; time</label><input id="breakStart" type="datetime-local"></div>
+      <div class="field"><label for="breakTime">Break start time (India)</label><input id="breakTime" type="time"></div>
       <div class="field"><label>Fixed duration</label><div class="fixed-duration" id="fixedBreakDuration">15 min</div></div>
+      <small class="break-date-note" id="breakDateAutoLabel">Date is automatic: today (Asia/Kolkata). A time already passed today is scheduled for tomorrow.</small>
     </div>
     <div class="scheduler-buttons">
       <button class="btn btn-primary" id="scheduleBreakBtn">Schedule break</button>
@@ -136,11 +141,40 @@
     <div class="scheduled-break-card" id="scheduledBreakCard" hidden></div>
   </section>
 
-  <section class="overview-grid">
-    <div class="metric-card"><div class="metric-icon blue">◷</div><small>COMPLETED SESSIONS · TODAY</small><strong id="metricSessions">0</strong><span id="metricSessionsSub">No session completed yet</span></div>
-    <div class="metric-card"><div class="metric-icon red">◉</div><small>FOCUS TIME · TODAY</small><strong id="metricFocus">0h 0m</strong><span id="metricFocusSub">Target: 7h 0m</span></div>
-    <div class="metric-card"><div class="metric-icon amber">☕</div><small>BREAK TIME · TODAY</small><strong id="metricBreak">0h 0m</strong><span id="metricBreakSub">Short + long breaks</span></div>
-    <div class="metric-card"><div class="metric-icon green">✓</div><small>DAILY TARGET REACHED</small><strong id="metricTarget">0%</strong><span id="metricTargetSub">0 of 7 focused hours</span></div>
+  <section class="overview-grid panel">
+    <div class="overview-heading"><div><h2>Today at a glance</h2><p>Study summary and independent stopwatch.</p></div><span class="overview-live">LIVE SUMMARY</span></div>
+    <div class="metric-compact-grid">
+      <div class="metric-card metric-compact"><small>COMPLETED SESSIONS</small><strong id="metricSessions">0</strong><span id="metricSessionsSub">No session completed yet</span></div>
+      <div class="metric-card metric-compact"><small>FOCUS TIME</small><strong id="metricFocus">0h 0m</strong><span id="metricFocusSub">Target: 7h 0m</span></div>
+      <div class="metric-card metric-compact"><small>BREAK TIME</small><strong id="metricBreak">0h 0m</strong><span id="metricBreakSub">Short + long breaks</span></div>
+      <div class="metric-card metric-compact"><small>DAILY TARGET</small><strong id="metricTarget">0%</strong><span id="metricTargetSub">0 of 7 focused hours</span></div>
+    </div>
+    <div class="stopwatch-panel">
+      <div class="stopwatch-heading"><div><h3>Analog stopwatch</h3><p>Unlimited duration · separate from Pomodoro</p></div><span id="stopwatchStatus" class="stopwatch-status">READY</span></div>
+      <div class="stopwatch-content">
+        <div class="stopwatch-clock-wrap">
+          <svg id="stopwatchDial" viewBox="0 0 240 240" role="img" aria-label="Analog stopwatch with unlimited elapsed time">
+            <circle cx="120" cy="120" r="114" class="sw-case"/>
+            <circle cx="120" cy="120" r="105" class="sw-face"/>
+            <circle cx="120" cy="120" r="82" class="sw-inner-ring"/>
+            <g id="swTicks"></g><g id="swLabels"></g>
+            <g class="sw-hands">
+              <line id="swHourHand" x1="120" y1="124" x2="120" y2="82"/>
+              <line id="swMinuteHand" x1="120" y1="126" x2="120" y2="55"/>
+              <line id="swSecondHand" x1="120" y1="133" x2="120" y2="35"/>
+              <circle cx="120" cy="120" r="7" class="sw-pin"/>
+            </g>
+          </svg>
+        </div>
+        <div class="stopwatch-details">
+          <div id="stopwatchDisplay" class="stopwatch-display">00:00:00</div>
+          <div class="stopwatch-controls"><button id="stopwatchStartPause" class="btn btn-primary btn-sm" type="button">Start</button><button id="stopwatchSave" class="btn btn-outline btn-sm" type="button" disabled>Finish &amp; save</button><button id="stopwatchReset" class="btn btn-text btn-sm" type="button">Reset</button></div>
+          <div class="stopwatch-history-head"><b>Recent uses</b><span>Last 5</span></div>
+          <ol id="stopwatchHistory" class="stopwatch-history"><li class="stopwatch-empty">Your saved stopwatch uses will appear here.</li></ol>
+          <small class="stopwatch-note">Stopwatch history is temporary and stays in this browser only.</small>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="panel history-panel">

@@ -6,12 +6,14 @@ const DB_KEY = "aiapget-clock-pomodoro-v1";
 const LOCAL_ENC_KEY = "pomo-clock-encrypted-local-v1";
 const CLIENT_KEY = "aiapget-clock-drive-client-id-v1";
 const DUR_KEY = "aiapget-clock-last-duration-v2";
+const SW_KEY = "pomo-clock-stopwatch-local-v1";
 const BREAK_DURS = {short:15,long:60};
 const CIRC = 2 * Math.PI * 174;
 let db = null, breakType = "short", analyticsRange = "day", driveToken = null, tokenClient = null;
 let lastSavedHash = "", tickHandle = null, cloudTimer = null, localEncryptWriteSeq = 0;
 let firebaseApp = null, firebaseAuth = null, firestore = null, authUser = null, encryptionKey = null, encryptionSalt = null, cloudReady = false, cloudSyncTimer = null;
-let alarmContext = null;
+let alarmContext = null, alarmNodes = new Set();
+let stopwatch = {running:false, accumulatedMs:0, startedAt:null, history:[]};
 const fmtDateKey = d => new Intl.DateTimeFormat("en-CA",{timeZone:TZ,year:"numeric",month:"2-digit",day:"2-digit"}).format(d);
 function nowMs(){ return Date.now(); }
 function nowDateLocalInput(){ // local display in India timezone for datetime-local fields
@@ -51,7 +53,7 @@ function mmss(ms) {
 function safeNum(v, def=0){const n=Number(v);return Number.isFinite(n)?n:def}
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
 function blankDb() {
- return {version:1,sessions:[],breaks:[],timer:{state:"idle",duration:60,remainingMs:60*60000,startedAt:null,deadline:null,sessionId:null,elapsedBefore:0},breakSchedule:null,breakState:null,dailyTargetHours:7,logs:[],backupSnapshots:[],lastLocalBackupDate:null,createdAt:nowMs(),updatedAt:nowMs()};
+ return {version:1,sessions:[],breaks:[],timer:{state:"idle",duration:60,remainingMs:60*60000,startedAt:null,deadline:null,sessionId:null,elapsedBefore:0},pendingSessionName:"",breakSchedule:null,breakState:null,dailyTargetHours:7,logs:[],backupSnapshots:[],lastLocalBackupDate:null,createdAt:nowMs(),updatedAt:nowMs()};
 }
 function loadDb(){
  try { const parsed=JSON.parse(localStorage.getItem(DB_KEY)||"null"); if(parsed&&typeof parsed==="object") { const base=blankDb(); db={...base,...parsed,timer:{...base.timer,...(parsed.timer||{})}}; if(!Array.isArray(db.sessions))db.sessions=[];if(!Array.isArray(db.breaks))db.breaks=[];if(!Array.isArray(db.backupSnapshots))db.backupSnapshots=[]; return; } } catch(e){}
@@ -141,7 +143,7 @@ function updateTimerView() {
  let display=""; let pct=0; let dialElapsedMs=0; let hint="Set your duration, then start.";
  if(t.state==="running") {
    const remain=remainingMs(t,now), elapsed=Math.min(t.duration*60000,elapsedMs(t,now));
-   display=mmss(remain);pct=t.duration?elapsed/(t.duration*60000):0;dialElapsedMs=elapsed;hint=`Session #${getActiveSession()?.number||"—"} · focused time`;
+   display=mmss(remain);pct=t.duration?elapsed/(t.duration*60000):0;dialElapsedMs=elapsed;hint=`${getActiveSession()?.name||`Session #${getActiveSession()?.number||"—"}`} · focused time`;
    if(remain<=0){finishSession("completed","Timer completed");return;}
  } else if(t.state==="paused") {
    const remain=Math.max(0,t.remainingMs||0), elapsed=Math.min(t.duration*60000,elapsedMs(t,now));
@@ -178,7 +180,7 @@ function updateTimerView() {
  $("skipBreakBtn").hidden=!isBreak;$("stopSessionBtn").disabled=!(isFocus||isPaused);
  const s=getActiveSession();
  $("activeSessionBadge").textContent=isFocus?`SESSION #${s?.number||"—"} RUNNING`:isPaused?"SESSION PAUSED":isBreak?"ON BREAK":"NO ACTIVE SESSION";
- $("activeSessionTitle").textContent=isFocus?`Session #${s?.number||"—"} · Focus in progress`:isPaused?`Session #${s?.number||"—"} · Paused`:isBreak?"Break active":`Session #${db.sessions.length+1} ready`;
+ $("activeSessionTitle").textContent=isFocus?`${s?.name||`Session #${s?.number||"—"}`} · Focus in progress`:isPaused?`${s?.name||`Session #${s?.number||"—"}`} · Paused`:isBreak?"Break active":`${db.pendingSessionName||`Session #${db.sessions.length+1}`} ready`;
  const breakState=db.breakState;
  const breakElapsed=breakState?Math.max(0,now-breakState.startAt)/60000:0;
  $("activeSessionElapsed").textContent=isFocus?`${fmtDuration(elapsedMs(t,now)/60000)} elapsed`:isPaused?`${fmtDuration(elapsedMs(t,now)/60000)} elapsed`:isBreak?`${fmtDuration(breakElapsed)} elapsed`:"Not started";
@@ -197,10 +199,13 @@ function startFocus(durationArg=null, automatic=false) {
  const duration=Math.max(1,Math.min(240,Math.round(durationArg||safeNum($("durationMinutes").value,60))));
  $("durationMinutes").value=duration;localStorage.setItem(DUR_KEY,String(duration));
  const start=nowMs(), id=newId(), number=db.sessions.length?Math.max(...db.sessions.map(s=>s.number||0))+1:1;
- const sess={id,number,name:`Session #${number}`,startAt:start,plannedEndAt:start+duration*60000,actualEndAt:null,plannedMinutes:duration,actualMinutes:0,activeDurationMs:0,pauseDurationMs:0,pausedAt:null,lastSegmentStartAt:start,status:"running",endReason:null,autoStarted:!!automatic};
+ const enteredName=String($("sessionName")?.value||db.pendingSessionName||"").trim().slice(0,80);
+ const sessionName=enteredName||`Session #${number}`;
+ const sess={id,number,name:sessionName,startAt:start,plannedEndAt:start+duration*60000,actualEndAt:null,plannedMinutes:duration,actualMinutes:0,activeDurationMs:0,pauseDurationMs:0,pausedAt:null,lastSegmentStartAt:start,status:"running",endReason:null,autoStarted:!!automatic};
  db.sessions.push(sess);
+ db.pendingSessionName="";
  Object.assign(t,{state:"running",duration,remainingMs:duration*60000,startedAt:start,deadline:start+duration*60000,sessionId:id,elapsedBefore:0});
- persist(); updateTimerView();toast(automatic?"Break finished · focus resumed":"Pomodoro started");
+ persist(); updateTimerView();playAlarm("start");toast(automatic?"Break finished · focus resumed":"Pomodoro started");
 }
 function finalizeSession(status,reason,endAt=nowMs()) {
  const t=db.timer, s=getActiveSession(); if(!s)return;
@@ -216,6 +221,8 @@ function finalizeSession(status,reason,endAt=nowMs()) {
 function finishSession(status="completed",reason="Timer completed",endAt=nowMs()) {
  if(db.timer.state==="running"||db.timer.state==="paused") finalizeSession(status,reason,endAt);
  if(status==="completed") playAlarm("focus");
+ const nextNumber=db.sessions.length?Math.max(...db.sessions.map(x=>x.number||0))+1:1;
+ if($("sessionName"))$("sessionName").value=db.pendingSessionName||`Session #${nextNumber}`;
  persist();updateTimerView();toast(status==="completed"?"Focus session completed":"Session ended: "+reason);
 }
 function pauseFocus() {
@@ -224,7 +231,7 @@ function pauseFocus() {
  const s=getActiveSession();if(s){s.activeDurationMs=(s.activeDurationMs||0)+Math.max(0,now-(s.lastSegmentStartAt||s.startAt));s.status="paused";s.pausedAt=now;}
  persist();updateTimerView();toast("Focus paused");
 }
-function resumeFocus(){const t=db.timer;if(t.state!=="paused")return;const now=nowMs(),s=getActiveSession();t.state="running";t.startedAt=now;t.deadline=now+t.remainingMs;if(s){if(s.pausedAt){s.pauseDurationMs=(s.pauseDurationMs||0)+Math.max(0,now-s.pausedAt);s.pausedAt=null;}s.status="running";s.resumedAt=now;s.lastSegmentStartAt=now;s.plannedEndAt=t.deadline;}persist();updateTimerView();toast("Focus resumed");}
+function resumeFocus(){const t=db.timer;if(t.state!=="paused")return;const now=nowMs(),s=getActiveSession();t.state="running";t.startedAt=now;t.deadline=now+t.remainingMs;if(s){if(s.pausedAt){s.pauseDurationMs=(s.pauseDurationMs||0)+Math.max(0,now-s.pausedAt);s.pausedAt=null;}s.status="running";s.resumedAt=now;s.lastSegmentStartAt=now;s.plannedEndAt=t.deadline;}persist();updateTimerView();playAlarm("start");toast("Focus resumed");}
 function cancelCurrentSession() {if(db.timer.state!=="running"&&db.timer.state!=="paused")return;finishSession("interrupted","Manual stop");}
 function startBreak(type, startAt=nowMs(), scheduled=false) {
  const existing=db.breakState;if(existing)return;
@@ -241,7 +248,7 @@ function finishBreak(manual=false) {
  const end=manual?nowMs():Math.min(nowMs(),b.endAt);b.actualEndAt=end;b.actualMinutes=Math.max(0,(end-b.startAt)/60000);b.status=manual?"ended early":"completed";b.manualEnd=manual;
  db.breakState=null;db.timer.state="idle";db.timer.remainingMs=db.timer.duration*60000;
  if(db.breakSchedule&&db.breakSchedule.status==="started")db.breakSchedule.status="completed";
- persist();playAlarm("resume");startFocus(safeNum($("durationMinutes").value,safeNum(localStorage.getItem(DUR_KEY),60)),true);
+ persist();startFocus(safeNum($("durationMinutes").value,safeNum(localStorage.getItem(DUR_KEY),60)),true);
 }
 function startScheduledBreak(sch) {
  if(!sch||sch.status!=="scheduled"||nowMs()<sch.startAt)return;
@@ -258,23 +265,92 @@ function renderSchedule(){
  $("cancelBreakBtn").disabled=!s||!["scheduled","started"].includes(s.status);
  $("scheduledBreakCard").hidden=!s;
  if(s){$("scheduledBreakCard").textContent=`${s.type==="short"?"Short break":"Long break"} · ${fmtLongDate(s.startAt)} at ${fmtClock(s.startAt)} · ${s.status}`;}
+ if($("breakDateAutoLabel"))$("breakDateAutoLabel").textContent=`Date is automatic: ${fmtLongDate(nowMs())} (Asia/Kolkata). A time already passed today is scheduled for tomorrow.`;
+}
+function nextIndiaDateKey(key){
+ const [y,m,d]=key.split("-").map(Number);
+ const next=new Date(Date.UTC(y,m-1,d+1));
+ return `${next.getUTCFullYear()}-${String(next.getUTCMonth()+1).padStart(2,"0")}-${String(next.getUTCDate()).padStart(2,"0")}`;
 }
 function scheduleBreak(){
- const val=$("breakStart").value,at=indiaInputToMs(val);
- if(!Number.isFinite(at)){toast("Choose a break start date and time.");return;}
- if(at<=nowMs()){toast("Choose a future break start time.");return;}
+ const val=$("breakTime").value;
+ if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(val)){toast("Choose the break start time.");return;}
+ let dateKey=fmtDateKey(new Date()),at=indiaInputToMs(`${dateKey}T${val}`);
+ // A time already passed today means the next occurrence, tomorrow.
+ if(at<=nowMs()) { dateKey=nextIndiaDateKey(dateKey); at=indiaInputToMs(`${dateKey}T${val}`); }
  const type=breakType;
  db.breakSchedule={id:newId(),type,startAt:at,status:"scheduled",createdAt:nowMs()};
- $("cancelBreakBtn").disabled=false;persist();renderSchedule();updateTimerView();toast(`${type==="short"?"Short":"Long"} break scheduled`);
+ $("cancelBreakBtn").disabled=false;persist();renderSchedule();updateTimerView();toast(`${type==="short"?"Short":"Long"} break scheduled for ${fmtLongDate(at)}`);
 }
 function cancelSchedule(){
  if(!db.breakSchedule)return;
  if(db.breakSchedule.status==="started"&&db.breakState){toast("A break is already running. Use End break & resume to override.");return;}
  db.breakSchedule.status="cancelled";persist();renderSchedule();updateTimerView();toast("Break schedule cancelled");
 }
-function playAlarm(kind) {
- try {const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;alarmContext=alarmContext||new AC();if(alarmContext.state==="suspended")alarmContext.resume();const freqs=kind==="break"?[660,880]:kind==="focus"?[880,660,880]:[523,784];let delay=0;freqs.forEach(f=>{const o=alarmContext.createOscillator(),g=alarmContext.createGain();o.frequency.value=f;o.type="sine";g.gain.setValueAtTime(.0001,alarmContext.currentTime+delay);g.gain.exponentialRampToValueAtTime(.13,alarmContext.currentTime+delay+.03);g.gain.exponentialRampToValueAtTime(.0001,alarmContext.currentTime+delay+.2);o.connect(g);g.connect(alarmContext.destination);o.start(alarmContext.currentTime+delay);o.stop(alarmContext.currentTime+delay+.22);delay+=.24;});}catch(e){}
+function stopAlarm(){
+ for(const node of alarmNodes){try{node.stop();}catch(e){}try{node.disconnect();}catch(e){}}
+ alarmNodes.clear();
 }
+function playAlarm(kind) {
+ try {
+   const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+   stopAlarm();alarmContext=alarmContext||new AC();
+   if(alarmContext.state==="suspended")alarmContext.resume().catch(()=>{});
+   const duration=kind==="focus"?14:8;
+   const tones=kind==="break"?[660,880]:[880,1046,784,988];
+   const base=alarmContext.currentTime+0.04,step=0.72,beep=0.27;
+   for(let offset=0,index=0;offset<duration;offset+=step,index++){
+     const start=base+offset, length=Math.min(beep,Math.max(0.06,duration-offset));
+     const osc=alarmContext.createOscillator(),gain=alarmContext.createGain();
+     osc.type="sine";osc.frequency.setValueAtTime(tones[index%tones.length],start);
+     gain.gain.setValueAtTime(0.0001,start);gain.gain.exponentialRampToValueAtTime(0.105,start+0.025);gain.gain.setValueAtTime(0.105,Math.max(start+0.03,start+length-0.045));gain.gain.exponentialRampToValueAtTime(0.0001,start+length);
+     osc.connect(gain);gain.connect(alarmContext.destination);alarmNodes.add(osc);
+     osc.onended=()=>{alarmNodes.delete(osc);try{osc.disconnect();gain.disconnect();}catch(e){}};
+     osc.start(start);osc.stop(start+length+0.01);
+   }
+ } catch(e) { console.warn("Notification sound could not be played",e); }
+}
+function saveSessionName(){
+ const value=String($("sessionName").value||"").trim().slice(0,80);
+ if(!value){toast("Enter a session name first.");$("sessionName").focus();return;}
+ const active=getActiveSession();
+ if(active&&(db.timer.state==="running"||db.timer.state==="paused")){active.name=value;toast("Current session renamed");}
+ else {db.pendingSessionName=value;toast("Next session name saved");}
+ persist();updateTimerView();
+}
+function stopwatchElapsed(){return Math.max(0,(stopwatch.accumulatedMs||0)+(stopwatch.running&&stopwatch.startedAt?nowMs()-stopwatch.startedAt:0));}
+function saveStopwatch(){
+ try{localStorage.setItem(SW_KEY,JSON.stringify({running:!!stopwatch.running,accumulatedMs:safeNum(stopwatch.accumulatedMs,0),startedAt:stopwatch.startedAt||null,history:(stopwatch.history||[]).slice(0,5)}));}catch(e){toast("Stopwatch could not be saved in this browser.");}
+}
+function loadStopwatch(){
+ try{const saved=JSON.parse(localStorage.getItem(SW_KEY)||"null");if(saved&&typeof saved==="object"){stopwatch={running:!!saved.running,accumulatedMs:Math.max(0,safeNum(saved.accumulatedMs,0)),startedAt:saved.startedAt||null,history:Array.isArray(saved.history)?saved.history.slice(0,5):[]};if(stopwatch.running&&!stopwatch.startedAt){stopwatch.running=false;}}}catch(e){}
+}
+function formatStopwatch(ms){const total=Math.max(0,Math.floor(ms/1000)),h=Math.floor(total/3600),m=Math.floor(total%3600/60),sec=total%60;return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;}
+function buildStopwatchDial(){
+ const ticks=$("swTicks"),labels=$("swLabels");if(!ticks||!labels)return;ticks.innerHTML="";labels.innerHTML="";
+ for(let i=0;i<60;i++){const a=(i*6-90)*Math.PI/180,major=i%5===0,r1=major?84:88,r2=major?98:94;const line=document.createElementNS("http://www.w3.org/2000/svg","line");line.setAttribute("x1",120+Math.cos(a)*r1);line.setAttribute("y1",120+Math.sin(a)*r1);line.setAttribute("x2",120+Math.cos(a)*r2);line.setAttribute("y2",120+Math.sin(a)*r2);line.setAttribute("class",major?"sw-tick major":"sw-tick");ticks.appendChild(line);if(major){const t=document.createElementNS("http://www.w3.org/2000/svg","text"),ang=(i*6-90)*Math.PI/180;t.setAttribute("x",120+Math.cos(ang)*75);t.setAttribute("y",120+Math.sin(ang)*75+3.5);t.setAttribute("text-anchor","middle");t.setAttribute("class","sw-label");t.textContent=String(i).padStart(2,"0");labels.appendChild(t);}}
+}
+function updateStopwatchView(){
+ const elapsed=stopwatchElapsed(),sec=elapsed/1000;
+ $("stopwatchDisplay").textContent=formatStopwatch(elapsed);
+ $("swSecondHand").setAttribute("transform",`rotate(${(sec%60)*6} 120 120)`);
+ $("swMinuteHand").setAttribute("transform",`rotate(${(sec/60%60)*6} 120 120)`);
+ $("swHourHand").setAttribute("transform",`rotate(${(sec/3600%12)*30+(sec/60%60)*0.5} 120 120)`);
+ $("stopwatchStatus").textContent=stopwatch.running?"RUNNING":elapsed>0?"PAUSED":"READY";
+ $("stopwatchStartPause").textContent=stopwatch.running?"Pause":"Start";
+ $("stopwatchSave").disabled=elapsed<1000;
+ const list=$("stopwatchHistory");
+ list.innerHTML=stopwatch.history.length?stopwatch.history.slice(0,5).map((entry,i)=>`<li><span><b>Use ${i+1}</b><small>${entry.completedAt?fmtStamp(entry.completedAt):"Saved locally"}</small></span><strong>${formatStopwatch(entry.durationMs)}</strong></li>`).join(""):'<li class="stopwatch-empty">Your saved stopwatch uses will appear here.</li>';
+}
+function toggleStopwatch(){
+ if(stopwatch.running){stopwatch.accumulatedMs=stopwatchElapsed();stopwatch.startedAt=null;stopwatch.running=false;}else{stopwatch.startedAt=nowMs();stopwatch.running=true;}saveStopwatch();updateStopwatchView();
+}
+function finishStopwatch(){
+ const durationMs=stopwatchElapsed();if(durationMs>=1000){stopwatch.history.unshift({durationMs,completedAt:nowMs()});stopwatch.history=stopwatch.history.slice(0,5);}
+ stopwatch.running=false;stopwatch.startedAt=null;stopwatch.accumulatedMs=0;saveStopwatch();updateStopwatchView();if(durationMs>=1000)toast("Stopwatch use saved locally");
+}
+function resetStopwatch(){stopwatch.running=false;stopwatch.startedAt=null;stopwatch.accumulatedMs=0;saveStopwatch();updateStopwatchView();}
+
 function getSessionsInRange(range, endDate=new Date()) {
  const endKey=fmtDateKey(endDate);
  let startMs;
@@ -409,7 +485,9 @@ function hydrateInputs(){
  }
  $("durationMinutes").value=savedDuration||String(t.duration||60);
  $("dailyTargetHours").value=db.dailyTargetHours||7;
- if(db.breakSchedule?.status==="scheduled"){$("breakStart").value=epochToIndiaLocal(db.breakSchedule.startAt);breakType=db.breakSchedule.type;}
+ if(db.breakSchedule?.status==="scheduled"){$("breakTime").value=epochToIndiaLocal(db.breakSchedule.startAt).slice(11,16);breakType=db.breakSchedule.type;}
+ $("breakDateAutoLabel").textContent=`Date is automatic: ${fmtLongDate(nowMs())} (Asia/Kolkata). A time already passed today is scheduled for tomorrow.`;
+ const active=getActiveSession();$("sessionName").value=active?.name||db.pendingSessionName||`Session #${db.sessions.length+1}`;
  document.querySelectorAll("[data-break-type]").forEach(b=>b.classList.toggle("selected",b.dataset.breakType===breakType));
  $("fixedBreakDuration").textContent=BREAK_DURS[breakType]+" min";
 }
@@ -649,6 +727,11 @@ function disconnectDrive(){
  driveToken=null;tokenClient=null;$("driveStatus").textContent="Not connected";$("syncDriveBtn").disabled=true;$("restoreDriveBtn").disabled=true;$("disconnectDriveBtn").disabled=true;toast("Google Drive disconnected for this page session");
 }
 function initEvents(){
+ $("saveSessionNameBtn").addEventListener("click",saveSessionName);
+ $("sessionName").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();saveSessionName();}});
+ $("stopwatchStartPause").addEventListener("click",toggleStopwatch);
+ $("stopwatchSave").addEventListener("click",finishStopwatch);
+ $("stopwatchReset").addEventListener("click",resetStopwatch);
  $("startPauseBtn").addEventListener("click",()=>{
    const st=db.timer.state;
    if(st==="running")pauseFocus();
@@ -656,6 +739,7 @@ function initEvents(){
    else if(st==="idle")startFocus(safeNum($("durationMinutes").value,60));
  });
  $("resetTimerBtn").addEventListener("click",()=>{
+   stopAlarm();
    if(db.timer.state==="running"||db.timer.state==="paused"){if(!confirm("End this active session and reset the timer?"))return;finishSession("interrupted","Manual reset");}
    db.timer.state="idle";db.timer.remainingMs=safeNum($("durationMinutes").value,60)*60000;db.timer.deadline=null;db.timer.startedAt=null;db.timer.sessionId=null;persist();updateTimerView();toast("Timer reset");
  });
@@ -689,8 +773,9 @@ loadDb();
 const lastDur=safeNum(localStorage.getItem(DUR_KEY),60);
 if(!db.timer||!db.timer.duration)db.timer={...blankDb().timer,duration:lastDur,remainingMs:lastDur*60000};
 if(db.timer.state==="running"&&db.timer.deadline&&nowMs()>=db.timer.deadline){finalizeSession("completed","Timer completed while app was closed",db.timer.deadline);db.timer.state="idle";db.timer.sessionId=null;db.timer.deadline=null;db.timer.startedAt=null;db.timer.remainingMs=db.timer.duration*60000;}
-buildDial();hydrateInputs();initEvents();renderAll();
+buildDial();buildStopwatchDial();loadStopwatch();hydrateInputs();initEvents();renderAll();updateStopwatchView();
 initializeSecureLayer();
 setInterval(()=>{if(cloudReady)doTick();},250);
 setInterval(()=>{if(db&&cloudReady){const day=fmtDateKey(new Date());if(db.lastLocalBackupDate!==day)persist();}},30000);
+setInterval(()=>{if(stopwatch.running)updateStopwatchView();},250);
 })();
