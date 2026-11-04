@@ -98,3 +98,19 @@ Do not enter an OAuth client secret in the app. The Drive feature is optional; F
 - Break scheduler: enter a time only; confirm the date is assigned automatically in Asia/Kolkata and a past time is scheduled for the next day.
 - Sound: start/resume alerts run for about 8 seconds, completion alert for about 14 seconds, and Reset stops a currently playing alert immediately. Browser autoplay/audio policies can affect sound until the app has received user interaction.
 - Stopwatch: start, pause, resume, finish and save; confirm that the latest five uses remain visible after a page reload in the same browser. Stopwatch data is local-only and is not included in Firestore or Drive sync.
+
+## Session Recovery update (v4)
+
+- A focus session keeps its original fixed time window. Pausing does not move the scheduled end time.
+- Pause intervals are recorded separately from active focus periods.
+- If the fixed window ends before the planned focus target is reached, the same history record is marked **Partial** and shows the remaining focus time. For example: a 2:00–3:00 PM session with a 15-minute pause records 45 minutes of focus, 15 minutes of pause, and 15 minutes remaining at 3:00 PM.
+- **Resume Again** continues the original session ID. Recovery attempts, focus periods, pause intervals, and wait time before returning are shown in expandable details under that same history row; no extra history row is created. The Session Pause column sums only actual pause intervals within focus attempts; the time between a Partial session ending and a later recovery is shown separately as waiting time, not misreported as a manual pause.
+- Daily/weekly/monthly focus analytics allocate each tracked focus block to the date on which that work actually happened, including a later recovery block.
+- Scheduled breaks during a running focus session pause that same session and automatically resume it after the break, provided its fixed window has not ended. If a manual pause was already active before the scheduled break, the app preserves that manual pause after the break.
+- Start/resume/break notifications use a gentle bell-style pentatonic chime for 8 seconds; fixed-window completion uses a longer chime for 14 seconds. Reset stops all scheduled and playing chime notes immediately.
+
+
+## v4 validation notes
+- Session history remains one numbered row per original session. The expandable detail area shows each focus block, manual/scheduled pause, fixed-window end, waiting period before recovery, and each later recovery block in chronological order.
+- Focus analytics allocate tracked focus segments to the calendar date when the work actually occurred.
+- Recovery-attempt focus and pause totals are stored per attempt as well as in the original session totals.

@@ -53,10 +53,37 @@ function mmss(ms) {
 function safeNum(v, def=0){const n=Number(v);return Number.isFinite(n)?n:def}
 function escapeHtml(value){return String(value??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
 function blankDb() {
- return {version:1,sessions:[],breaks:[],timer:{state:"idle",duration:60,remainingMs:60*60000,startedAt:null,deadline:null,sessionId:null,elapsedBefore:0},pendingSessionName:"",breakSchedule:null,breakState:null,dailyTargetHours:7,logs:[],backupSnapshots:[],lastLocalBackupDate:null,createdAt:nowMs(),updatedAt:nowMs()};
+ return {version:1,sessions:[],breaks:[],timer:{state:"idle",duration:60,remainingMs:60*60000,startedAt:null,deadline:null,sessionId:null,elapsedBefore:0,mode:null,attemptId:null},pendingSessionName:"",breakSchedule:null,breakState:null,dailyTargetHours:7,logs:[],backupSnapshots:[],lastLocalBackupDate:null,createdAt:nowMs(),updatedAt:nowMs()};
+}
+function normalizeDbSessions(){
+ if(!Array.isArray(db.sessions))db.sessions=[];
+ if(!Array.isArray(db.breaks))db.breaks=[];
+ if(!Array.isArray(db.backupSnapshots))db.backupSnapshots=[];
+ db.timer={...blankDb().timer,...(db.timer||{})};
+ db.sessions.forEach(s=>{
+   if(!Array.isArray(s.focusSegments))s.focusSegments=[];
+   if(!Array.isArray(s.pauseIntervals))s.pauseIntervals=[];
+   if(!Array.isArray(s.recoveryAttempts))s.recoveryAttempts=[];
+   if(!Number.isFinite(Number(s.targetDurationMs)))s.targetDurationMs=Math.max(1,safeNum(s.plannedMinutes,60))*60000;
+   if(!s.focusSegments.length&&safeNum(s.activeDurationMs,0)>0){
+     s.focusSegments.push({id:newId(),attemptId:null,mode:"legacy",startAt:s.startAt||nowMs(),endAt:s.actualEndAt||null,durationMs:safeNum(s.activeDurationMs,0),legacy:true});
+   }
+   if(!s.pauseIntervals.length&&safeNum(s.pauseDurationMs,0)>0){
+     s.pauseIntervals.push({id:newId(),attemptId:null,type:"legacy",startAt:s.startAt||nowMs(),endAt:(s.startAt||nowMs())+safeNum(s.pauseDurationMs,0),durationMs:safeNum(s.pauseDurationMs,0),legacy:true});
+   }
+   if(s.id===db.timer.sessionId&&!s.recoveryAttempts.length&&["running","paused"].includes(s.status)){
+     const attemptId=db.timer.attemptId||newId();db.timer.attemptId=attemptId;db.timer.mode=db.timer.mode||"initial";
+     s.recoveryAttempts.push({id:attemptId,mode:db.timer.mode,startAt:s.startAt||db.timer.startedAt||nowMs(),deadline:db.timer.deadline||s.plannedEndAt||nowMs(),targetMs:s.targetDurationMs,status:s.status,endAt:null});
+     if(db.timer.state==="running"&&!s.focusSegments.some(x=>x.endAt==null))openFocusSegment(s,db.timer.startedAt||s.lastSegmentStartAt||s.startAt||nowMs(),db.timer.mode,attemptId);
+     if(db.timer.state==="paused"&&!s.pauseIntervals.some(x=>x.endAt==null))openPauseInterval(s,s.pausedAt||nowMs(),"manual",attemptId);
+   }
+ });
 }
 function loadDb(){
- try { const parsed=JSON.parse(localStorage.getItem(DB_KEY)||"null"); if(parsed&&typeof parsed==="object") { const base=blankDb(); db={...base,...parsed,timer:{...base.timer,...(parsed.timer||{})}}; if(!Array.isArray(db.sessions))db.sessions=[];if(!Array.isArray(db.breaks))db.breaks=[];if(!Array.isArray(db.backupSnapshots))db.backupSnapshots=[]; return; } } catch(e){}
+ try{
+   const parsed=JSON.parse(localStorage.getItem(DB_KEY)||"null");
+   if(parsed&&typeof parsed==="object"){db={...blankDb(),...parsed,timer:{...blankDb().timer,...(parsed.timer||{})}};normalizeDbSessions();return;}
+ }catch(e){}
  db=blankDb();
 }
 function serialize(){return JSON.stringify(db);}
@@ -126,12 +153,12 @@ function renderRealClock() {
 }
 function getActiveSession(){ const id=db.timer.sessionId; return id?db.sessions.find(s=>s.id===id):null; }
 function elapsedMs(t, now=nowMs()){
- if(t.state==="running"&&t.startedAt) return Math.max(0,(t.elapsedBefore||0)+now-t.startedAt);
- return Math.max(0,t.elapsedBefore||0);
+ const s=getActiveSession();
+ return s?sessionFocusMs(s,now):Math.max(0,t.elapsedBefore||0);
 }
 function remainingMs(t, now=nowMs()){
- if(t.state==="running"&&t.deadline) return Math.max(0,t.deadline-now);
- if(t.state==="paused") return Math.max(0,t.remainingMs||0);
+ if((t.state==="running"||t.state==="paused")&&t.deadline) return Math.max(0,t.deadline-now);
+ if(t.state==="break"&&db.breakState) return Math.max(0,db.breakState.endAt-now);
  return Math.max(0,t.remainingMs||0);
 }
 function setDialProgress(pct){
@@ -140,115 +167,209 @@ function setDialProgress(pct){
 }
 function updateTimerView() {
  const t=db.timer, now=nowMs();
- let display=""; let pct=0; let dialElapsedMs=0; let hint="Set your duration, then start.";
- if(t.state==="running") {
-   const remain=remainingMs(t,now), elapsed=Math.min(t.duration*60000,elapsedMs(t,now));
-   display=mmss(remain);pct=t.duration?elapsed/(t.duration*60000):0;dialElapsedMs=elapsed;hint=`${getActiveSession()?.name||`Session #${getActiveSession()?.number||"—"}`} · focused time`;
-   if(remain<=0){finishSession("completed","Timer completed");return;}
- } else if(t.state==="paused") {
-   const remain=Math.max(0,t.remainingMs||0), elapsed=Math.min(t.duration*60000,elapsedMs(t,now));
-   display=mmss(remain);pct=t.duration?elapsed/(t.duration*60000):0;dialElapsedMs=elapsed;hint="Timer paused · resume when ready.";
+ let display="", pct=0, dialElapsedMs=0, hint="Set your duration, then start.";
+ const s=getActiveSession();
+ if((t.state==="running"||t.state==="paused")&&s&&t.deadline&&now>=t.deadline){
+   closeAttemptAtDeadline(t.deadline);
+   return;
+ }
+ if(t.state==="running"||t.state==="paused") {
+   const remain=remainingMs(t,now), target=Math.max(1,s?.targetDurationMs||safeNum(t.duration,60)*60000);
+   const focused=s?sessionFocusMs(s,now):elapsedMs(t,now);
+   display=mmss(remain);pct=focused/target;dialElapsedMs=focused;
+   const left=Math.max(0,target-focused);
+   hint=t.state==="paused"
+     ? `Paused · fixed window closes at ${fmtClock(t.deadline)} · ${fmtDuration(left/60000)} focus remaining`
+     : `${s?.name||`Session #${s?.number||"—"}`} · window closes at ${fmtClock(t.deadline)} · ${fmtDuration(left/60000)} focus remaining`;
  } else if(t.state==="break") {
    const b=db.breakState,remain=b?Math.max(0,b.endAt-now):0;
    const breakDurationMs=b?Math.max(0,b.endAt-b.startAt):safeNum(t.duration,60)*60000;
    const elapsed=Math.max(0,breakDurationMs-remain);
-   display=mmss(remain);pct=breakDurationMs?elapsed/breakDurationMs:0;dialElapsedMs=elapsed;hint=b?`${b.type==="short"?"Short":"Long"} break · auto-resume at ${fmtClock(b.endAt)}`:"Break in progress";
+   display=mmss(remain);pct=breakDurationMs?elapsed/breakDurationMs:0;dialElapsedMs=elapsed;
+   hint=b?`${b.type==="short"?"Short":"Long"} break · auto-resume at ${fmtClock(b.endAt)}`:"Break in progress";
    if(remain<=0){finishBreak();return;}
  } else {
    display=mmss(safeNum(t.duration,60)*60000);pct=0;dialElapsedMs=0;hint="Set your duration, then start.";
  }
- // The red ring is a real minute scale: 00 at the top, increasing counter-clockwise to 55.
- // One complete revolution represents 60 elapsed minutes; the normal clock hands remain clockwise.
  $("timerDisplay").textContent=display;$("dialTimerText").textContent=display;
  const dialPct=Math.min(1,Math.max(0,dialElapsedMs/(60*60000)));
- setDialProgress(dialPct);$("timerProgress").style.width=(Math.min(1,Math.max(0,pct))*100)+"%";$("elapsedLabel").textContent=Math.round(Math.min(1,Math.max(0,pct))*100)+"% elapsed";$("timerHint").textContent=hint;
+ setDialProgress(dialPct);$("timerProgress").style.width=(Math.min(1,Math.max(0,pct))*100)+"%";$("elapsedLabel").textContent=Math.round(Math.min(1,Math.max(0,pct))*100)+"% of focus target";$("timerHint").textContent=hint;
  const isFocus=t.state==="running",isPaused=t.state==="paused",isBreak=t.state==="break";
  const lastSession=db.sessions.slice().sort((a,b)=>b.startAt-a.startAt)[0];
  const focusStage=isFocus?"running":(lastSession?.status==="completed"?"complete":"inactive");
  $("modeDot").className="mode-dot "+focusStage;
  $("timerProgress").className=focusStage;
  const breakPanel=$("breakElapsedPanel"),breakBar=$("breakElapsedProgress");
- if(isBreak&&db.breakState){const b=db.breakState, total=Math.max(1,b.endAt-b.startAt), elapsed=Math.max(0,Math.min(total,now-b.startAt));breakPanel.classList.add("active");$("breakElapsedLabel").textContent=`${mmss(elapsed)} elapsed · ${Math.round(elapsed/total*100)}%` ;breakBar.style.width=(elapsed/total*100)+"%";}else{breakPanel.classList.remove("active");$("breakElapsedLabel").textContent="Not active";breakBar.style.width="0%";}
+ if(isBreak&&db.breakState){const b=db.breakState,total=Math.max(1,b.endAt-b.startAt),elapsed=Math.max(0,Math.min(total,now-b.startAt));breakPanel.classList.add("active");$("breakElapsedLabel").textContent=`${mmss(elapsed)} elapsed · ${Math.round(elapsed/total*100)}%`;breakBar.style.width=(elapsed/total*100)+"%";}else{breakPanel.classList.remove("active");$("breakElapsedLabel").textContent="Not active";breakBar.style.width="0%";}
  $("startPauseText").textContent=isFocus?"Pause focus":isPaused?"Resume focus":isBreak?"Focus is on break":"Start focus";
  $("startPauseIcon").textContent=isFocus?"Ⅱ":isPaused?"▶":isBreak?"☕":"▶";
  $("startPauseBtn").disabled=isBreak;
  $("modeTitle").textContent=isFocus?"Focus in progress":isPaused?"Session paused":isBreak?"Rest & recharge":"Ready to focus?";
  $("modeEyebrow").textContent=isBreak?"SCHEDULED BREAK":isPaused?"POMODORO PAUSED":"POMODORO SESSION";
- // Status colour is stage-based: idle red, active focus mustard, completed green.
-
  $("clockStatus").textContent=isFocus?"REAL CLOCK · POMODORO RUNNING":isBreak?"REAL CLOCK · BREAK RUNNING":"REAL TIME · ASIA/KOLKATA";
  $("skipBreakBtn").hidden=!isBreak;$("stopSessionBtn").disabled=!(isFocus||isPaused);
- const s=getActiveSession();
- $("activeSessionBadge").textContent=isFocus?`SESSION #${s?.number||"—"} RUNNING`:isPaused?"SESSION PAUSED":isBreak?"ON BREAK":"NO ACTIVE SESSION";
- $("activeSessionTitle").textContent=isFocus?`${s?.name||`Session #${s?.number||"—"}`} · Focus in progress`:isPaused?`${s?.name||`Session #${s?.number||"—"}`} · Paused`:isBreak?"Break active":`${db.pendingSessionName||`Session #${db.sessions.length+1}`} ready`;
- const breakState=db.breakState;
- const breakElapsed=breakState?Math.max(0,now-breakState.startAt)/60000:0;
- $("activeSessionElapsed").textContent=isFocus?`${fmtDuration(elapsedMs(t,now)/60000)} elapsed`:isPaused?`${fmtDuration(elapsedMs(t,now)/60000)} elapsed`:isBreak?`${fmtDuration(breakElapsed)} elapsed`:"Not started";
+ $("activeSessionBadge").textContent=isFocus?`SESSION #${s?.number||"—"} RUNNING`:isPaused?"SESSION PAUSED":isBreak?(db.breakState?.sessionId?`SESSION #${s?.number||"—"} ON BREAK`:"ON BREAK"):"NO ACTIVE SESSION";
+ $("activeSessionTitle").textContent=isFocus?`${s?.name||`Session #${s?.number||"—"}`} · Focus in progress`:isPaused?`${s?.name||`Session #${s?.number||"—"}`} · Paused`:isBreak?(s?`${s.name} · Scheduled break`:"Break active"):`${db.pendingSessionName||`Session #${db.sessions.length+1}`} ready`;
+ const breakState=db.breakState,breakElapsed=breakState?Math.max(0,now-breakState.startAt)/60000:0;
+ $("activeSessionElapsed").textContent=isFocus||isPaused?(s?`${fmtDuration(sessionFocusMs(s,now)/60000)} focused`:"Not started"):isBreak?`${fmtDuration(breakElapsed)} elapsed`:"Not started";
  $("activeSessionStrip").querySelector(".active-pulse").classList.toggle("running",isFocus||isBreak);
  const sch=db.breakSchedule;
- if(sch&&sch.status==="scheduled"){
-   $("nextBreakNote").innerHTML=`<span class="mini-icon">◷</span><span>${sch.type==="short"?"Short":"Long"} break at ${fmtClock(sch.startAt)} · ${BREAK_DURS[sch.type]} min</span>`;
- }else if(isBreak) $("nextBreakNote").innerHTML=`<span class="mini-icon">☕</span><span>Break ends at ${fmtClock(db.breakState?.endAt)} · automatic resume is enabled</span>`;
+ if(sch&&sch.status==="scheduled")$("nextBreakNote").innerHTML=`<span class="mini-icon">◷</span><span>${sch.type==="short"?"Short":"Long"} break at ${fmtClock(sch.startAt)} · ${BREAK_DURS[sch.type]} min</span>`;
+ else if(isBreak)$("nextBreakNote").innerHTML=`<span class="mini-icon">☕</span><span>Break ends at ${fmtClock(db.breakState?.endAt)} · automatic resume is enabled</span>`;
  else $("nextBreakNote").innerHTML=`<span class="mini-icon">◷</span><span>No break scheduled yet.</span>`;
 }
 function newId(){return (crypto.randomUUID?crypto.randomUUID():String(nowMs())+Math.random().toString(36).slice(2));}
+function sessionTargetMs(s){return Math.max(1,s.targetDurationMs||safeNum(s.plannedMinutes,60)*60000);}
+function closeOpenFocusSegment(s,endAt){
+ const seg=(s.focusSegments||[]).slice().reverse().find(x=>x.endAt==null);
+ if(seg){seg.endAt=endAt;seg.durationMs=Math.max(0,endAt-seg.startAt);}
+}
+function openFocusSegment(s,startAt,mode,attemptId){
+ s.focusSegments=s.focusSegments||[];
+ s.focusSegments.push({id:newId(),attemptId,mode,startAt,endAt:null,durationMs:0});
+}
+function openPauseInterval(s,startAt,type,attemptId){
+ s.pauseIntervals=s.pauseIntervals||[];
+ if(s.pauseIntervals.some(x=>x.endAt==null))return;
+ s.pauseIntervals.push({id:newId(),attemptId,type,startAt,endAt:null,durationMs:0});
+}
+function closeOpenPauseInterval(s,endAt){
+ const pause=(s.pauseIntervals||[]).slice().reverse().find(x=>x.endAt==null);
+ if(pause){pause.endAt=endAt;pause.durationMs=Math.max(0,endAt-pause.startAt);}
+}
+function refreshSessionTotals(s){
+ s.activeDurationMs=(s.focusSegments||[]).reduce((sum,x)=>sum+Math.max(0,safeNum(x.durationMs,x.endAt!=null?x.endAt-x.startAt:0)),0);
+ s.pauseDurationMs=(s.pauseIntervals||[]).reduce((sum,x)=>sum+Math.max(0,safeNum(x.durationMs,x.endAt!=null?x.endAt-x.startAt:0)),0);
+ s.actualMinutes=s.activeDurationMs/60000;
+}
+function attemptDurationMs(items,attemptId){
+ return (items||[]).filter(x=>x.attemptId===attemptId).reduce((sum,x)=>sum+Math.max(0,safeNum(x.durationMs,x.endAt!=null?x.endAt-x.startAt:0)),0);
+}
 function startFocus(durationArg=null, automatic=false) {
  const t=db.timer;
- if(t.state==="running")return;
+ if(t.state==="running"||t.state==="paused")return;
  if(t.state==="break"){toast("End the active break to start focus.");return;}
  const duration=Math.max(1,Math.min(240,Math.round(durationArg||safeNum($("durationMinutes").value,60))));
  $("durationMinutes").value=duration;localStorage.setItem(DUR_KEY,String(duration));
- const start=nowMs(), id=newId(), number=db.sessions.length?Math.max(...db.sessions.map(s=>s.number||0))+1:1;
+ const start=nowMs(),id=newId(),number=db.sessions.length?Math.max(...db.sessions.map(x=>x.number||0))+1:1;
  const enteredName=String($("sessionName")?.value||db.pendingSessionName||"").trim().slice(0,80);
- const sessionName=enteredName||`Session #${number}`;
- const sess={id,number,name:sessionName,startAt:start,plannedEndAt:start+duration*60000,actualEndAt:null,plannedMinutes:duration,actualMinutes:0,activeDurationMs:0,pauseDurationMs:0,pausedAt:null,lastSegmentStartAt:start,status:"running",endReason:null,autoStarted:!!automatic};
- db.sessions.push(sess);
- db.pendingSessionName="";
- Object.assign(t,{state:"running",duration,remainingMs:duration*60000,startedAt:start,deadline:start+duration*60000,sessionId:id,elapsedBefore:0});
- persist(); updateTimerView();playAlarm("start");toast(automatic?"Break finished · focus resumed":"Pomodoro started");
+ const sessionName=enteredName||`Session #${number}`,targetMs=duration*60000,attemptId=newId(),deadline=start+targetMs;
+ const sess={id,number,name:sessionName,startAt:start,plannedEndAt:deadline,actualEndAt:null,plannedMinutes:duration,targetDurationMs:targetMs,actualMinutes:0,activeDurationMs:0,pauseDurationMs:0,pausedAt:null,lastSegmentStartAt:start,status:"running",endReason:null,autoStarted:!!automatic,focusSegments:[],pauseIntervals:[],recoveryAttempts:[{id:attemptId,mode:"initial",startAt:start,deadline,targetMs,status:"running",endAt:null}]};
+ openFocusSegment(sess,start,"initial",attemptId);db.sessions.push(sess);db.pendingSessionName="";
+ Object.assign(t,{state:"running",duration,remainingMs:targetMs,startedAt:start,deadline,sessionId:id,elapsedBefore:0,mode:"initial",attemptId});
+ persist();updateTimerView();playAlarm("start");toast(automatic?"Break finished · original focus session resumed":"Pomodoro started");
 }
-function finalizeSession(status,reason,endAt=nowMs()) {
- const t=db.timer, s=getActiveSession(); if(!s)return;
- s.actualEndAt=endAt;
- const activeMs=(s.activeDurationMs||0)+(t.state==="running"&&t.startedAt?Math.max(0,endAt-t.startedAt):0);
- if(t.state==="paused"&&s.pausedAt) s.pauseDurationMs=(s.pauseDurationMs||0)+Math.max(0,endAt-s.pausedAt);
- s.pausedAt=null;
- s.activeDurationMs=activeMs;s.actualMinutes=Math.max(0,activeMs/60000);
- s.status=status;s.endReason=reason;
- s.elapsedBefore=s.actualMinutes*60000;
- Object.assign(t,{state:"idle",remainingMs:t.duration*60000,startedAt:null,deadline:null,sessionId:null,elapsedBefore:0});
+function endTimerToIdle({preserveBreak=false}={}){
+ const t=db.timer;
+ t.startedAt=null;t.remainingMs=Math.max(0,safeNum(t.duration,60)*60000);t.elapsedBefore=0;t.mode=null;t.attemptId=null;t.deadline=null;
+ if(!preserveBreak){t.state="idle";t.sessionId=null;}
+ else {t.sessionId=null;t.mode=null;t.attemptId=null;}
 }
-function finishSession(status="completed",reason="Timer completed",endAt=nowMs()) {
- if(db.timer.state==="running"||db.timer.state==="paused") finalizeSession(status,reason,endAt);
- if(status==="completed") playAlarm("focus");
- const nextNumber=db.sessions.length?Math.max(...db.sessions.map(x=>x.number||0))+1:1;
- if($("sessionName"))$("sessionName").value=db.pendingSessionName||`Session #${nextNumber}`;
- persist();updateTimerView();toast(status==="completed"?"Focus session completed":"Session ended: "+reason);
+function closeAttemptAtDeadline(endAt=nowMs()){
+ const t=db.timer,s=getActiveSession();if(!s||!t.deadline)return;
+ const closeAt=Math.min(endAt,t.deadline);
+ if(t.state==="running")closeOpenFocusSegment(s,closeAt);
+ else closeOpenPauseInterval(s,closeAt);
+ refreshSessionTotals(s);
+ const attempt=(s.recoveryAttempts||[]).find(x=>x.id===t.attemptId)||s.recoveryAttempts?.slice(-1)[0];
+ const completed=s.activeDurationMs>=sessionTargetMs(s)-500;
+ if(attempt){attempt.endAt=closeAt;attempt.status=completed?"completed":"partial";attempt.focusMs=attemptDurationMs(s.focusSegments,attempt.id);attempt.pauseMs=attemptDurationMs(s.pauseIntervals,attempt.id);}
+ s.actualEndAt=closeAt;s.completedAt=completed?closeAt:null;s.status=completed?"completed":"partial";s.endReason=completed?"Focus target achieved":"Fixed session window ended";s.pausedAt=null;s.lastAttemptEndAt=closeAt;
+ const preserveBreak=t.state==="break";
+ endTimerToIdle({preserveBreak});
+ if(completed||!preserveBreak)$("sessionName").value=db.pendingSessionName||`Session #${(db.sessions.reduce((m,x)=>Math.max(m,x.number||0),0))+1}`;
+ persist();updateTimerView();renderHistory();playAlarm("focus");toast(completed?"Focus target completed":"Session window ended · remaining focus saved as Partial");
 }
-function pauseFocus() {
- const t=db.timer;if(t.state!=="running")return;
- const now=nowMs();t.remainingMs=Math.max(0,t.deadline-now);t.elapsedBefore+=Math.max(0,now-t.startedAt);t.state="paused";t.startedAt=null;t.deadline=null;
- const s=getActiveSession();if(s){s.activeDurationMs=(s.activeDurationMs||0)+Math.max(0,now-(s.lastSegmentStartAt||s.startAt));s.status="paused";s.pausedAt=now;}
- persist();updateTimerView();toast("Focus paused");
+function finishSession(status="partial",reason="Manual stop",endAt=nowMs()){
+ const t=db.timer,s=getActiveSession();if(!s)return;
+ if(t.deadline&&endAt>=t.deadline){closeAttemptAtDeadline(t.deadline);return;}
+ const closeAt=endAt;
+ if(t.state==="running")closeOpenFocusSegment(s,closeAt);
+ else if(t.state==="paused"||t.state==="break")closeOpenPauseInterval(s,closeAt);
+ refreshSessionTotals(s);
+ const completed=s.activeDurationMs>=sessionTargetMs(s)-500;
+ const attempt=(s.recoveryAttempts||[]).find(x=>x.id===t.attemptId)||s.recoveryAttempts?.slice(-1)[0];
+ if(attempt){attempt.endAt=closeAt;attempt.status=completed?"completed":status;attempt.focusMs=attemptDurationMs(s.focusSegments,attempt.id);attempt.pauseMs=attemptDurationMs(s.pauseIntervals,attempt.id);}
+ s.actualEndAt=closeAt;s.completedAt=completed?closeAt:null;s.status=completed?"completed":status;s.endReason=completed?"Focus target achieved":reason;s.pausedAt=null;s.lastAttemptEndAt=closeAt;
+ endTimerToIdle();
+ if($("sessionName"))$("sessionName").value=db.pendingSessionName||`Session #${db.sessions.reduce((m,x)=>Math.max(m,x.number||0),0)+1}`;
+ persist();updateTimerView();renderHistory();if(completed||status==="partial")playAlarm("focus");toast(completed?"Focus session completed":`Session saved: ${s.status.toUpperCase()}`);
 }
-function resumeFocus(){const t=db.timer;if(t.state!=="paused")return;const now=nowMs(),s=getActiveSession();t.state="running";t.startedAt=now;t.deadline=now+t.remainingMs;if(s){if(s.pausedAt){s.pauseDurationMs=(s.pauseDurationMs||0)+Math.max(0,now-s.pausedAt);s.pausedAt=null;}s.status="running";s.resumedAt=now;s.lastSegmentStartAt=now;s.plannedEndAt=t.deadline;}persist();updateTimerView();playAlarm("start");toast("Focus resumed");}
-function cancelCurrentSession() {if(db.timer.state!=="running"&&db.timer.state!=="paused")return;finishSession("interrupted","Manual stop");}
-function startBreak(type, startAt=nowMs(), scheduled=false) {
- const existing=db.breakState;if(existing)return;
- if(db.timer.state==="running"||db.timer.state==="paused") finalizeSession("interrupted",scheduled?"Scheduled break":"Manual break",startAt);
- const mins=BREAK_DURS[type], begin=Math.max(startAt,nowMs()),endAt=begin+mins*60000;
- const b={id:newId(),type,startAt:begin,plannedStartAt:startAt,endAt,plannedMinutes:mins,actualEndAt:null,actualMinutes:0,status:"running",scheduled:!!scheduled,manualEnd:false};
+function pauseFocus(pauseType="manual"){
+ const t=db.timer,s=getActiveSession();if(t.state!=="running"||!s)return;
+ const now=nowMs();if(t.deadline&&now>=t.deadline){closeAttemptAtDeadline(t.deadline);return;}
+ closeOpenFocusSegment(s,now);openPauseInterval(s,now,pauseType,t.attemptId);refreshSessionTotals(s);
+ s.status="paused";s.pausedAt=now;
+ t.remainingMs=Math.max(0,(t.deadline||now)-now);t.state="paused";t.startedAt=null;
+ persist();updateTimerView();toast("Focus paused · original end time remains fixed");
+}
+function resumeFocus(){
+ const t=db.timer,s=getActiveSession();if(t.state!=="paused"||!s)return;
+ const now=nowMs();if(t.deadline&&now>=t.deadline){closeAttemptAtDeadline(t.deadline);return;}
+ closeOpenPauseInterval(s,now);refreshSessionTotals(s);s.pausedAt=null;s.status="running";s.resumedAt=now;
+ openFocusSegment(s,now,t.mode||"initial",t.attemptId);
+ t.state="running";t.startedAt=now;t.remainingMs=Math.max(0,t.deadline-now);
+ persist();updateTimerView();playAlarm("start");toast("Focus resumed · original end time unchanged");
+}
+function resumeAgain(sessionId){
+ if(db.timer.state!=="idle"){toast("Finish the current timer or break before recovering another session.");return;}
+ const s=db.sessions.find(x=>x.id===sessionId);if(!s||s.status!=="partial"){toast("This session has no remaining focus to recover.");return;}
+ refreshSessionTotals(s);const remaining=Math.max(0,sessionTargetMs(s)-s.activeDurationMs);
+ if(remaining<=500){s.status="completed";s.actualEndAt=s.actualEndAt||nowMs();persist();renderHistory();return;}
+ const now=nowMs(),attemptId=newId(),deadline=now+remaining;
+ s.recoveryAttempts=s.recoveryAttempts||[];s.recoveryAttempts.push({id:attemptId,mode:"recovery",startAt:now,deadline,targetMs:remaining,status:"running",endAt:null});
+ s.status="running";s.actualEndAt=null;s.completedAt=null;s.endReason="Recovery in progress";s.pausedAt=null;s.currentAttemptId=attemptId;
+ openFocusSegment(s,now,"recovery",attemptId);
+ Object.assign(db.timer,{state:"running",duration:s.plannedMinutes,remainingMs:remaining,startedAt:now,deadline,sessionId:s.id,elapsedBefore:s.activeDurationMs,mode:"recovery",attemptId});
+ $("durationMinutes").value=s.plannedMinutes;$("sessionName").value=s.name;
+ persist();updateTimerView();renderHistory();playAlarm("start");toast(`Resuming Session #${s.number} · ${fmtDuration(remaining/60000)} remaining`);
+}
+function cancelCurrentSession(){if(db.timer.state!=="running"&&db.timer.state!=="paused")return;finishSession("interrupted","Manual stop");}
+function startBreak(type,startAt=nowMs(),scheduled=false){
+ if(db.breakState)return;
+ const t=db.timer,s=getActiveSession(),now=nowMs(),begin=Math.max(startAt,now),mins=BREAK_DURS[type],endAt=begin+mins*60000;
+ if(s){
+   if(t.state==="running"){
+     closeOpenFocusSegment(s,begin);openPauseInterval(s,begin,"scheduled-break",t.attemptId);refreshSessionTotals(s);s.status="paused";s.pausedAt=begin;
+   }
+   // If already manually paused, keep its open pause interval and its original deadline.
+ }else{
+   t.deadline=null;t.startedAt=null;t.sessionId=null;t.mode=null;t.attemptId=null;
+ }
+ const b={id:newId(),type,startAt:begin,plannedStartAt:startAt,endAt,plannedMinutes:mins,actualEndAt:null,actualMinutes:0,status:"running",scheduled:!!scheduled,manualEnd:false,sessionId:s?.id||null,resumeAfterBreak:!!(s&&t.state==="running")};
  db.breaks.push(b);db.breakState=b;
- Object.assign(db.timer,{state:"break",startedAt:null,deadline:null,sessionId:null,remainingMs:mins*60000,duration:mins,elapsedBefore:0});
+ Object.assign(t,{state:"break",startedAt:null,remainingMs:mins*60000});
  if(db.breakSchedule&&db.breakSchedule.status==="scheduled")db.breakSchedule.status="started";
  persist();updateTimerView();playAlarm("break");toast(`${type==="short"?"Short":"Long"} break started`);
 }
-function finishBreak(manual=false) {
+function finishBreak(manual=false){
  const b=db.breakState;if(!b)return;
  const end=manual?nowMs():Math.min(nowMs(),b.endAt);b.actualEndAt=end;b.actualMinutes=Math.max(0,(end-b.startAt)/60000);b.status=manual?"ended early":"completed";b.manualEnd=manual;
- db.breakState=null;db.timer.state="idle";db.timer.remainingMs=db.timer.duration*60000;
+ const attachedId=b.sessionId;
+ if(attachedId&&db.timer.sessionId===attachedId&&db.timer.deadline&&nowMs()>=db.timer.deadline)closeAttemptAtDeadline(db.timer.deadline);
+ db.breakState=null;
  if(db.breakSchedule&&db.breakSchedule.status==="started")db.breakSchedule.status="completed";
- persist();startFocus(safeNum($("durationMinutes").value,safeNum(localStorage.getItem(DUR_KEY),60)),true);
+ if(attachedId){
+   const s=db.sessions.find(x=>x.id===attachedId);
+   if(s&&db.timer.sessionId===s.id&&["running","paused"].includes(s.status)){
+     if(b.resumeAfterBreak){
+       closeOpenPauseInterval(s,nowMs());refreshSessionTotals(s);s.pausedAt=null;s.status="running";
+       openFocusSegment(s,nowMs(),db.timer.mode||"initial",db.timer.attemptId);
+       db.timer.state="running";db.timer.startedAt=nowMs();db.timer.remainingMs=Math.max(0,db.timer.deadline-nowMs());
+       persist();updateTimerView();playAlarm("start");toast("Break finished · same session resumed");
+     }else{
+       // A scheduled break must not override a manual pause that was already active.
+       s.status="paused";db.timer.state="paused";db.timer.startedAt=null;
+       db.timer.remainingMs=Math.max(0,db.timer.deadline-nowMs());
+       persist();updateTimerView();toast("Break finished · your manual pause is still active");
+     }
+   }else{
+     endTimerToIdle();persist();updateTimerView();toast("Break finished · original session remains in history");
+   }
+ }else{
+   db.timer.state="idle";db.timer.remainingMs=db.timer.duration*60000;db.timer.startedAt=null;db.timer.deadline=null;
+   persist();startFocus(safeNum($("durationMinutes").value,safeNum(localStorage.getItem(DUR_KEY),60)),true);
+ }
 }
 function startScheduledBreak(sch) {
  if(!sch||sch.status!=="scheduled"||nowMs()<sch.startAt)return;
@@ -291,30 +412,49 @@ function stopAlarm(){
  for(const node of alarmNodes){try{node.stop();}catch(e){}try{node.disconnect();}catch(e){}}
  alarmNodes.clear();
 }
-function playAlarm(kind) {
- try {
+function playAlarm(kind){
+ try{
    const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
    stopAlarm();alarmContext=alarmContext||new AC();
    if(alarmContext.state==="suspended")alarmContext.resume().catch(()=>{});
    const duration=kind==="focus"?14:8;
-   const tones=kind==="break"?[660,880]:[880,1046,784,988];
-   const base=alarmContext.currentTime+0.04,step=0.72,beep=0.27;
-   for(let offset=0,index=0;offset<duration;offset+=step,index++){
-     const start=base+offset, length=Math.min(beep,Math.max(0.06,duration-offset));
-     const osc=alarmContext.createOscillator(),gain=alarmContext.createGain();
-     osc.type="sine";osc.frequency.setValueAtTime(tones[index%tones.length],start);
-     gain.gain.setValueAtTime(0.0001,start);gain.gain.exponentialRampToValueAtTime(0.105,start+0.025);gain.gain.setValueAtTime(0.105,Math.max(start+0.03,start+length-0.045));gain.gain.exponentialRampToValueAtTime(0.0001,start+length);
-     osc.connect(gain);gain.connect(alarmContext.destination);alarmNodes.add(osc);
-     osc.onended=()=>{alarmNodes.delete(osc);try{osc.disconnect();gain.disconnect();}catch(e){}};
-     osc.start(start);osc.stop(start+length+0.01);
-   }
- } catch(e) { console.warn("Notification sound could not be played",e); }
+   // A soft, bell-like pentatonic chime with gentle inharmonic partials and rounded decay.
+   const notes=kind==="focus"
+     ?[523.25,659.25,784,987.77,1046.5,987.77,784,659.25,784,987.77,1174.66,1046.5,987.77,784,659.25,523.25,659.25,784,987.77,1046.5,1174.66,987.77,784]
+     :[659.25,784,987.77,784,659.25,784,1046.5,987.77,784,659.25,784,1046.5,1174.66];
+   const spacing=kind==="focus"?0.61:0.61;
+   const noteLength=kind==="focus"?1.08:1.02;
+   const base=alarmContext.currentTime+0.05;
+   notes.forEach((freq,index)=>{
+     const offset=index*spacing;if(offset>=duration)return;
+     const start=base+offset,len=Math.min(noteLength,duration-offset);
+     const bus=alarmContext.createGain();bus.gain.setValueAtTime(0.58,start);bus.connect(alarmContext.destination);
+     const partials=[
+       {ratio:1,gain:0.082,decay:len},
+       {ratio:2.756,gain:0.021,decay:Math.min(len,0.78)},
+       {ratio:5.404,gain:0.008,decay:Math.min(len,0.42)}
+     ];
+     const nodes=[bus];let ended=0;
+     const cleanup=()=>{ended++;if(ended===partials.length){nodes.forEach(node=>{alarmNodes.delete(node);try{node.disconnect();}catch(e){}});}};
+     partials.forEach(partial=>{
+       const osc=alarmContext.createOscillator(),gain=alarmContext.createGain();
+       osc.type="sine";osc.frequency.setValueAtTime(freq*partial.ratio,start);
+       const decay=Math.max(0.08,partial.decay);
+       gain.gain.setValueAtTime(0.0001,start);
+       gain.gain.exponentialRampToValueAtTime(partial.gain,start+0.012);
+       gain.gain.exponentialRampToValueAtTime(0.0001,start+decay);
+       osc.connect(gain);gain.connect(bus);nodes.push(osc,gain);alarmNodes.add(osc);alarmNodes.add(gain);
+       osc.onended=cleanup;osc.start(start);osc.stop(start+decay+0.025);
+     });
+     alarmNodes.add(bus);
+   });
+ }catch(e){console.warn("Notification chime could not be played",e);}
 }
 function saveSessionName(){
  const value=String($("sessionName").value||"").trim().slice(0,80);
  if(!value){toast("Enter a session name first.");$("sessionName").focus();return;}
  const active=getActiveSession();
- if(active&&(db.timer.state==="running"||db.timer.state==="paused")){active.name=value;toast("Current session renamed");}
+ if(active&&(db.timer.state==="running"||db.timer.state==="paused"||db.timer.state==="break")){active.name=value;toast("Current session renamed");}
  else {db.pendingSessionName=value;toast("Next session name saved");}
  persist();updateTimerView();
 }
@@ -363,40 +503,56 @@ function getSessionsInRange(range, endDate=new Date()) {
 }
 function rangeStartEnd(range, ref=new Date()){
  const key=fmtDateKey(ref);
- if(range==="day")return {start:indiaInputToMs(key+"T00:00"),end:indiaInputToMs(key+"T23:59")};
+ if(range==="day"){const start=indiaInputToMs(key+"T00:00");return {start,end:start+86400000-1};}
  if(range==="week"){const d=new Date(ref);d.setDate(d.getDate()-6);return {start:indiaInputToMs(fmtDateKey(d)+"T00:00"),end:ref.getTime()};}
  const monthKey=new Intl.DateTimeFormat("en-CA",{timeZone:TZ,year:"numeric",month:"2-digit"}).format(ref);
  return {start:indiaInputToMs(monthKey+"-01T00:00"),end:ref.getTime()};
 }
-function sessionPauseMs(s, now=nowMs()) {
+function sessionPauseMs(s,now=nowMs()){
+ if(Array.isArray(s.pauseIntervals)&&s.pauseIntervals.length){
+   return s.pauseIntervals.reduce((sum,p)=>sum+Math.max(0,p.endAt!=null?(p.durationMs??p.endAt-p.startAt):((s.id===db.timer.sessionId&&(db.timer.state==="paused"||db.timer.state==="break"))?now-p.startAt:0)),0);
+ }
  const saved=Math.max(0,Number(s.pauseDurationMs||0));
  return saved+(s.status==="paused"&&s.pausedAt?Math.max(0,now-s.pausedAt):0);
 }
-function sessionFocusMs(s, now=nowMs()) {
- if(s.actualEndAt!==null&&s.actualEndAt!==undefined) return Math.max(0,(s.activeDurationMs??(Number(s.actualMinutes||0)*60000)));
- if(s.status==="running"&&db.timer.sessionId===s.id&&db.timer.state==="running") return Math.max(0,(s.activeDurationMs||0)+now-(db.timer.startedAt||now));
- if(s.status==="paused"&&db.timer.sessionId===s.id) return Math.max(0,s.activeDurationMs||0);
- return Math.max(0,Number(s.activeDurationMs??(Number(s.actualMinutes||0)*60000)));
+function sessionFocusMs(s,now=nowMs()){
+ const saved=Math.max(0,Number(s.activeDurationMs??(Number(s.actualMinutes||0)*60000)));
+ if(s.actualEndAt!==null&&s.actualEndAt!==undefined)return saved;
+ if(s.id===db.timer.sessionId&&db.timer.state==="running"&&db.timer.startedAt)return saved+Math.max(0,Math.min(now,db.timer.deadline||now)-db.timer.startedAt);
+ return saved;
+}
+function sessionFocusMsInRange(s,start,end,now=nowMs()){
+ const tracked=(s.focusSegments||[]).filter(seg=>!seg.legacy&&Number.isFinite(Number(seg.startAt)));
+ if(!tracked.length){return s.startAt>=start&&s.startAt<=end?sessionFocusMs(s,now):0;}
+ return tracked.reduce((sum,seg)=>{
+   const segStart=Number(seg.startAt);
+   let segEnd=seg.endAt!=null?Number(seg.endAt):now;
+   if(seg.endAt==null&&s.id===db.timer.sessionId&&db.timer.deadline)segEnd=Math.min(segEnd,db.timer.deadline);
+   const overlap=Math.max(0,Math.min(segEnd,end)-Math.max(segStart,start));
+   return sum+overlap;
+ },0);
 }
 function calcRangeStats(range) {
  const bounds=rangeStartEnd(range), now=nowMs();
  const sessions=db.sessions.filter(s=>s.startAt>=bounds.start&&s.startAt<=bounds.end);
  const breaks=db.breaks.filter(b=>b.startAt>=bounds.start&&b.startAt<=bounds.end);
- const focusMs=sessions.reduce((sum,s)=>sum+sessionFocusMs(s,now),0);
+ const focusMs=db.sessions.reduce((sum,s)=>sum+sessionFocusMsInRange(s,bounds.start,bounds.end,now),0);
  const plannedMs=sessions.reduce((sum,s)=>sum+(s.plannedMinutes||0)*60000,0);
  const completed=sessions.filter(s=>s.status==="completed").length;
  const interrupted=sessions.filter(s=>s.status==="interrupted").length;
+ const partial=sessions.filter(s=>s.status==="partial").length;
+ const outstandingMs=sessions.reduce((sum,s)=>sum+(s.status==="partial"?Math.max(0,sessionTargetMs(s)-sessionFocusMs(s,now)):0),0);
  const breakMs=breaks.reduce((sum,b)=>sum+Math.max(0,(b.actualEndAt||now)-b.startAt),0);
  let targetMs=0;
  if(range==="day") targetMs=db.dailyTargetHours*3600000;
  else if(range==="week")targetMs=db.dailyTargetHours*7*3600000;
  else { const dt=new Date(now);const p=indiaParts(dt);const [year,month]=[Number(p.year),Number(new Intl.DateTimeFormat("en-CA",{timeZone:TZ,month:"2-digit"}).format(dt))];const day=Number(p.day);targetMs=db.dailyTargetHours*day*3600000; }
- return {sessions,breaks,focusMs,plannedMs,completed,interrupted,breakMs,targetMs,goalPct:targetMs?Math.min(999,focusMs/targetMs*100):0};
+ return {sessions,breaks,focusMs,plannedMs,completed,interrupted,partial,outstandingMs,breakMs,targetMs,goalPct:targetMs?Math.min(999,focusMs/targetMs*100):0};
 }
 function renderTopMetrics(){
  const day=calcRangeStats("day");
  $("metricSessions").textContent=day.completed;
- $("metricSessionsSub").textContent=day.interrupted?`${day.interrupted} interrupted`:"Completed focus sessions";
+ $("metricSessionsSub").textContent=`${day.partial} partial · ${day.interrupted} interrupted`;
  $("metricFocus").textContent=fmtDuration(day.focusMs/60000);
  $("metricFocusSub").textContent=`Target: ${fmtDuration(db.dailyTargetHours*60)}`;
  $("metricBreak").textContent=fmtDuration(day.breakMs/60000);
@@ -404,14 +560,53 @@ function renderTopMetrics(){
  $("metricTarget").textContent=Math.round(day.focusMs/day.targetMs*100||0)+"%";
  $("metricTargetSub").textContent=`${fmtDuration(day.focusMs/60000)} of ${fmtDuration(db.dailyTargetHours*60)}`;
 }
+function compactTime(ms){
+ const minutes=Math.max(0,Math.round(ms/60000));
+ return minutes<60?`${minutes}m`:`${Math.floor(minutes/60)}h ${minutes%60}m`;
+}
+function renderSessionDetails(s){
+ const attempts=(s.recoveryAttempts||[]).slice().sort((a,b)=>a.startAt-b.startAt);
+ const events=[];
+ attempts.forEach((a,i)=>{
+   if(i>0){const previous=attempts[i-1],gapStart=previous.endAt||previous.deadline,gapEnd=a.startAt;if(gapStart&&gapEnd>gapStart)events.push({at:gapStart,type:"gap",start:gapStart,end:gapEnd,label:"Waiting before recovery",duration:gapEnd-gapStart});}
+   (s.focusSegments||[]).filter(x=>x.attemptId===a.id).forEach(x=>events.push({at:x.startAt,type:"focus",start:x.startAt,end:x.endAt,label:a.mode==="recovery"?"Recovery focus":"Focus period",duration:x.endAt==null?Math.max(0,nowMs()-x.startAt):safeNum(x.durationMs,x.endAt-x.startAt)}));
+   (s.pauseIntervals||[]).filter(x=>x.attemptId===a.id).forEach(x=>events.push({at:x.startAt,type:"pause",start:x.startAt,end:x.endAt,label:x.type==="scheduled-break"?"Scheduled break / pause":"Focus paused",duration:x.endAt==null?Math.max(0,nowMs()-x.startAt):safeNum(x.durationMs,x.endAt-x.startAt)}));
+   if(a.endAt)events.push({at:a.endAt,type:"window",start:a.endAt,end:a.endAt,label:a.status==="completed"?"Focus target achieved":"Focus window ended",duration:0});
+ });
+ if(!events.length){
+   const legacyFocus=sessionFocusMs(s),legacyPause=sessionPauseMs(s);
+   return `<div class="session-detail-card"><div class="session-detail-summary"><b>Session target</b><strong>${compactTime(sessionTargetMs(s))}</strong><span>Actual focus ${compactTime(legacyFocus)} · Session pause ${compactTime(legacyPause)}</span></div><p class="session-detail-note">Detailed period-by-period timestamps will be available for sessions recorded after this update. Earlier records remain preserved.</p></div>`;
+ }
+ events.sort((a,b)=>a.at-b.at||({focus:0,pause:1,window:2,gap:3}[a.type]-({focus:0,pause:1,window:2,gap:3}[b.type])));
+ const timeline=events.map(e=>{
+   const time=e.end?`${fmtClock(e.start)} – ${fmtClock(e.end)}`: `${fmtClock(e.start)} – ongoing`;
+   const detail=e.type==="window"?"":compactTime(e.duration);
+   return `<div class="session-activity-item ${e.type}"><i></i><div><b>${escapeHtml(e.label)}</b><small>${time}</small></div><strong>${detail}</strong></div>`;
+ }).join("");
+ const legacyFocus=(s.focusSegments||[]).filter(x=>x.legacy).reduce((sum,x)=>sum+safeNum(x.durationMs,0),0);
+ const legacyPause=(s.pauseIntervals||[]).filter(x=>x.legacy).reduce((sum,x)=>sum+safeNum(x.durationMs,0),0);
+ const legacyNote=(legacyFocus||legacyPause)?`<p class="session-detail-note">Earlier recorded activity: ${compactTime(legacyFocus)} focus · ${compactTime(legacyPause)} paused. Exact focus/pause timestamps were not stored by the earlier app version, so they are not reconstructed here.</p>`:"";
+ const target=sessionTargetMs(s),focus=sessionFocusMs(s),remaining=Math.max(0,target-focus);
+ return `<div class="session-detail-card"><div class="session-detail-summary"><b>Target ${compactTime(target)}</b><strong>${compactTime(focus)} focused</strong><span>${compactTime(sessionPauseMs(s))} paused · ${compactTime(remaining)} remaining</span></div><div><div class="session-activity-list">${timeline}</div>${legacyNote}</div></div>`;
+}
 function renderHistory(){
  const filter=$("historyFilter").value,now=nowMs();
  let start=0;if(filter==="today")start=indiaInputToMs(fmtDateKey(new Date())+"T00:00");else if(filter==="7days")start=now-7*86400000;else if(filter==="30days")start=now-30*86400000;
  const list=db.sessions.filter(s=>s.startAt>=start).slice().sort((a,b)=>b.startAt-a.startAt);
  const tbody=$("sessionTable");
  if(!list.length)tbody.innerHTML='<tr><td colspan="7" class="empty-cell">No sessions in this range yet.</td></tr>';
- else tbody.innerHTML=list.map(s=>`<tr><td>${s.number||"—"}</td><td><button class="session-name-edit" type="button" data-rename-session="${s.id}" title="Rename this session">${escapeHtml(s.name||`Session #${s.number||"—"}`)} <span aria-hidden="true">✎</span></button>${s.autoStarted?' <small>auto</small>':""}</td><td>${fmtClock(s.startAt)}</td><td>${s.actualEndAt?fmtClock(s.actualEndAt):s.status==="running"?"Running":s.status==="paused"?"Paused":"—"}</td><td>${fmtDuration(sessionPauseMs(s)/60000)}</td><td>${fmtDuration(sessionFocusMs(s)/60000)}</td><td><span class="result-pill ${s.status==="completed"?"result-completed":s.status==="interrupted"?"result-interrupted":"result-paused"}">${s.status==="completed"?"Completed":s.status==="interrupted"?"Interrupted":s.status==="running"?"Running":"Paused"}</span></td></tr>`).join("");
+ else tbody.innerHTML=list.map(s=>{
+   const focus=sessionFocusMs(s),target=sessionTargetMs(s),left=Math.max(0,target-focus),isPartial=s.status==="partial",isRecovery=s.id===db.timer.sessionId&&db.timer.mode==="recovery"&&["running","paused"].includes(s.status);
+   const resultClass=s.status==="completed"?"result-completed":s.status==="partial"?"result-partial":s.status==="interrupted"?"result-interrupted":isRecovery?"result-recovering":s.status==="running"?"result-running":"result-paused";
+   const resultLabel=s.status==="completed"?"COMPLETED":isPartial?"PARTIAL":s.status==="interrupted"?"INTERRUPTED":isRecovery?(s.status==="paused"?"RECOVERY PAUSED":"RECOVERING"):s.status==="running"?"IN PROGRESS":"PAUSED";
+   const endLabel=s.actualEndAt?fmtClock(s.actualEndAt):s.status==="running"?`Until ${fmtClock(db.timer.deadline)}`:s.status==="paused"?`Until ${fmtClock(db.timer.deadline)}`:"—";
+   const focusLabel=`${compactTime(focus)} / ${compactTime(target)}`;
+   const button=isPartial&&left>0?`<button class="resume-again-btn" type="button" data-resume-session="${s.id}" title="Recover ${compactTime(left)} focus time">↻ Resume Again · ${compactTime(left)}</button>`:"";
+   return `<tr class="session-main-row"><td>${s.number||"—"}</td><td><div class="session-title-cell"><button class="session-name-edit" type="button" data-rename-session="${s.id}" title="Rename this session">${escapeHtml(s.name||`Session #${s.number||"—"}`)} <span aria-hidden="true">✎</span></button><button class="session-detail-toggle" type="button" data-toggle-session="${s.id}" aria-expanded="false" title="Show focus and pause timeline">Details⌄</button>${s.autoStarted?' <small>auto</small>':""}</div></td><td>${fmtClock(s.startAt)}</td><td>${endLabel}</td><td>${compactTime(sessionPauseMs(s))}</td><td>${focusLabel}</td><td><span class="result-pill ${resultClass}">${resultLabel}</span>${isPartial?`<small class="remaining-focus">${compactTime(left)} focus left</small>`:""}${button}</td></tr><tr class="session-detail-row" id="session-detail-${s.id}" hidden><td colspan="7">${renderSessionDetails(s)}</td></tr>`;
+ }).join("");
  tbody.querySelectorAll("[data-rename-session]").forEach(btn=>btn.addEventListener("click",()=>{const session=db.sessions.find(x=>x.id===btn.dataset.renameSession);if(!session)return;const value=prompt("Enter a name for this session:",session.name||`Session #${session.number}`);if(value===null)return;const name=value.trim().slice(0,80);if(!name){toast("Session name cannot be empty.");return;}session.name=name;persist();renderHistory();toast("Session renamed");}));
+ tbody.querySelectorAll("[data-toggle-session]").forEach(btn=>btn.addEventListener("click",()=>{const row=$("session-detail-"+btn.dataset.toggleSession);if(!row)return;const open=row.hidden;row.hidden=!open;btn.setAttribute("aria-expanded",String(open));btn.textContent=open?"Hide details⌃":"Details⌄";}));
+ tbody.querySelectorAll("[data-resume-session]").forEach(btn=>btn.addEventListener("click",()=>resumeAgain(btn.dataset.resumeSession)));
  const breakList=db.breaks.filter(b=>b.startAt>=start).slice().sort((a,b)=>b.startAt-a.startAt).slice(0,6);
  $("breakHistory").innerHTML=breakList.length?breakList.map(b=>`<div class="break-history-item"><div><b>${b.type==="short"?"Short":"Long"} break</b><span>${fmtStamp(b.startAt)}${b.endAt?" – "+fmtClock(b.actualEndAt||b.endAt):""}</span></div><strong>${fmtDuration((b.actualEndAt||now)-b.startAt>0?((b.actualEndAt||now)-b.startAt)/60000:0)}</strong></div>`).join(""):'<p class="empty-cell">Break records will appear here.</p>';
 }
@@ -424,7 +619,7 @@ function chartDays(range) {
 }
 function renderFocusChart(range) {
  const points=chartDays(range);
- const vals=points.map(p=>db.sessions.filter(s=>s.startAt>=p.start&&s.startAt<=p.end).reduce((sum,s)=>sum+sessionFocusMs(s,nowMs())/60000,0));
+ const vals=points.map(p=>db.sessions.reduce((sum,s)=>sum+sessionFocusMsInRange(s,p.start,p.end,nowMs())/60000,0));
  const target=range==="day"?db.dailyTargetHours*60/12:db.dailyTargetHours*60;
  const max=Math.max(target,...vals,30);
  $("focusChartTitle").textContent=range==="day"?"Today's focus by 2-hour block":range==="week"?"Daily focus · last 7 days":"Daily focus · this month";
@@ -434,8 +629,11 @@ function renderFocusChart(range) {
  }).join("");
 }
 function renderDonut(stats){
- const total=stats.completed+stats.interrupted,done=total?stats.completed/total*360:0;
- $("resultChart").innerHTML=`<div class="donut" style="background:conic-gradient(#2d8068 0deg ${done}deg,#dfe6eb ${done}deg 360deg)"><div class="donut-center"><strong>${total}</strong><span>total sessions</span></div></div><div class="donut-legend"><div><i class="legend-dot" style="background:#2d8068"></i>${stats.completed} completed</div><div><i class="legend-dot" style="background:#dfe6eb"></i>${stats.interrupted} interrupted</div></div>`;
+ const active=stats.sessions.filter(s=>["running","paused"].includes(s.status)).length;
+ const total=stats.completed+stats.partial+stats.interrupted+active;
+ const done=total?stats.completed/total*360:0,partial=total?stats.partial/total*360:0,interrupted=total?stats.interrupted/total*360:0;
+ const partialEnd=done+partial,interruptedEnd=partialEnd+interrupted;
+ $("resultChart").innerHTML=`<div class="donut" style="background:conic-gradient(#2f8b68 0deg ${done}deg,#d59a35 ${done}deg ${partialEnd}deg,#cbd4d0 ${partialEnd}deg ${interruptedEnd}deg,#5b8eb5 ${interruptedEnd}deg 360deg)"><div class="donut-center"><strong>${total}</strong><span>total sessions</span></div></div><div class="donut-legend"><div><i class="legend-dot" style="background:#2f8b68"></i>${stats.completed} completed</div><div><i class="legend-dot" style="background:#d59a35"></i>${stats.partial} partial</div><div><i class="legend-dot" style="background:#cbd4d0"></i>${stats.interrupted} interrupted</div><div><i class="legend-dot" style="background:#5b8eb5"></i>${active} active</div></div>`;
 }
 function renderAnalytics(){
  const r=calcRangeStats(analyticsRange);
@@ -443,13 +641,13 @@ function renderAnalytics(){
  $("analysisGoal").textContent=Math.round(r.targetMs?r.focusMs/r.targetMs*100:0)+"%";
  $("analysisGoalText").textContent=`${fmtDuration(r.focusMs/60000)} / ${fmtDuration(r.targetMs/60000)}`;
  $("analysisSessions").textContent=r.completed;
- $("analysisInterrupted").textContent=`${r.interrupted} interrupted`;
+ $("analysisInterrupted").textContent=`${r.partial} partial · ${r.interrupted} interrupted`;
  $("analysisPlanned").textContent=fmtDuration(r.plannedMs/60000);
  renderFocusChart(analyticsRange);renderDonut(r);
  const difference=r.targetMs-r.focusMs;
  const phrase=difference<=0?"Goal met or exceeded in this range.":`${fmtDuration(difference/60000)} remaining to reach this range's target.`;
  const best=r.sessions.filter(s=>s.status==="completed").sort((a,b)=>(b.actualMinutes||0)-(a.actualMinutes||0))[0];
- $("analysisSummary").innerHTML=`<b>${analyticsRange==="day"?"Daily":analyticsRange==="week"?"Weekly":"Monthly"} analysis</b><p>Actual focused time: <strong>${fmtDuration(r.focusMs/60000)}</strong> across ${r.completed} completed session(s), with ${r.interrupted} interrupted. Planned session duration total: ${fmtDuration(r.plannedMs/60000)}. Break time: ${fmtDuration(r.breakMs/60000)}. ${phrase}${best?` Longest completed session: #${best.number}, ${fmtDuration(best.actualMinutes)} (${fmtClock(best.startAt)}–${fmtClock(best.actualEndAt)}).`:""} ${r.sessions.length===0?"No session records in this range yet. Start a session to build your analysis.":""}</p>`;
+ $("analysisSummary").innerHTML=`<b>${analyticsRange==="day"?"Daily":analyticsRange==="week"?"Weekly":"Monthly"} analysis</b><p>Actual focused time: <strong>${fmtDuration(r.focusMs/60000)}</strong> across ${r.completed} completed session(s), with ${r.partial} partial and ${r.interrupted} interrupted. Outstanding focus: ${fmtDuration(r.outstandingMs/60000)}. Planned session duration total: ${fmtDuration(r.plannedMs/60000)}. Break time: ${fmtDuration(r.breakMs/60000)}. ${phrase}${best?` Longest completed session: #${best.number}, ${fmtDuration(best.actualMinutes)} (${fmtClock(best.startAt)}–${fmtClock(best.actualEndAt)}).`:""} ${r.sessions.length===0?"No session records in this range yet. Start a session to build your analysis.":""}</p>`;
 }
 function updateLocalBackupList(){
  const root=$("localBackups");if(!root||!db)return;
@@ -464,13 +662,16 @@ function exportJson(){
 }
 function download(name,blob){const a=document.createElement("a"),url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
 function exportCsv(){
- const rows=[["Session #","Session name","Start India","End India","Planned minutes","Session pause minutes","Actual focus minutes","Status","End reason","Auto-started"]];
- db.sessions.slice().sort((a,b)=>a.startAt-b.startAt).forEach(s=>rows.push([s.number,s.name||`Session #${s.number}`,fmtStamp(s.startAt),s.actualEndAt?fmtStamp(s.actualEndAt):"",s.plannedMinutes,Math.round(sessionPauseMs(s)/60000*10)/10,Math.round(sessionFocusMs(s)/60000*10)/10,s.status,s.endReason||"",s.autoStarted?"yes":"no"]));
+ const rows=[["Session #","Session name","Start India","Final end India","Planned minutes","Session pause minutes","Actual focus minutes","Remaining focus minutes","Status","Focus/recovery timeline (India)","End reason","Auto-started"]];
+ db.sessions.slice().sort((a,b)=>a.startAt-b.startAt).forEach(s=>{
+   const timeline=(s.focusSegments||[]).map(x=>`${x.mode||"focus"}: ${fmtStamp(x.startAt)}–${x.endAt?fmtStamp(x.endAt):"ongoing"}`).join(" | ");
+   rows.push([s.number,s.name||`Session #${s.number}`,fmtStamp(s.startAt),s.actualEndAt?fmtStamp(s.actualEndAt):"",s.plannedMinutes,Math.round(sessionPauseMs(s)/60000*10)/10,Math.round(sessionFocusMs(s)/60000*10)/10,Math.round(Math.max(0,sessionTargetMs(s)-sessionFocusMs(s))/60000*10)/10,s.status,timeline,s.endReason||"",s.autoStarted?"yes":"no"]);
+ });
  const csv=rows.map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
  download("POMO-Clock-Sessions.csv",new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}));toast("Session CSV exported");
 }
 function importJsonFile(file){
- const reader=new FileReader();reader.onload=()=>{try{const p=JSON.parse(reader.result),next=p.data||p.entries||p;if(!next||!Array.isArray(next.sessions))throw new Error("Invalid backup");if(!confirm("Restore this backup? It will replace the current local diary data."))return;db={...blankDb(),...next,timer:{...blankDb().timer,...next.timer}};persist({cloud:false});hydrateInputs();renderAll();toast("Backup restored");}catch(e){toast("Could not read this backup file.");}};reader.readAsText(file);
+ const reader=new FileReader();reader.onload=()=>{try{const p=JSON.parse(reader.result),next=p.data||p.entries||p;if(!next||!Array.isArray(next.sessions))throw new Error("Invalid backup");if(!confirm("Restore this backup? It will replace the current local diary data."))return;db={...blankDb(),...next,timer:{...blankDb().timer,...next.timer}};normalizeDbSessions();persist({cloud:false});hydrateInputs();renderAll();toast("Backup restored");}catch(e){toast("Could not read this backup file.");}};reader.readAsText(file);
 }
 function renderAll(){renderRealClock();updateTimerView();renderSchedule();renderTopMetrics();renderHistory();renderAnalytics();updateLocalBackupList();}
 function hydrateInputs(){
@@ -487,7 +688,7 @@ function hydrateInputs(){
  $("dailyTargetHours").value=db.dailyTargetHours||7;
  if(db.breakSchedule?.status==="scheduled"){$("breakTime").value=epochToIndiaLocal(db.breakSchedule.startAt).slice(11,16);breakType=db.breakSchedule.type;}
  $("breakDateAutoLabel").textContent=`Date is automatic: ${fmtLongDate(nowMs())} (Asia/Kolkata). A time already passed today is scheduled for tomorrow.`;
- const active=getActiveSession();$("sessionName").value=active?.name||db.pendingSessionName||`Session #${db.sessions.length+1}`;
+ const active=getActiveSession();$("sessionName").value=active?.name||db.pendingSessionName||`Session #${db.sessions.reduce((m,x)=>Math.max(m,x.number||0),0)+1}`;
  document.querySelectorAll("[data-break-type]").forEach(b=>b.classList.toggle("selected",b.dataset.breakType===breakType));
  $("fixedBreakDuration").textContent=BREAK_DURS[breakType]+" min";
 }
@@ -497,9 +698,10 @@ function epochToIndiaLocal(ms){
 }
 function doTick(){
  renderRealClock();
- // Catch a scheduled break if the app is open; while closed, browsers cannot guarantee background execution.
+ // Fixed session windows continue to elapse even while manually paused or in a scheduled break.
+ if(db.timer.sessionId&&db.timer.deadline&&nowMs()>=db.timer.deadline)closeAttemptAtDeadline(db.timer.deadline);
+ // Catch scheduled breaks while the app is open. Browsers cannot guarantee background execution while closed.
  processSchedule();
- if(db.timer.state==="running"&&db.timer.deadline&&nowMs()>=db.timer.deadline)finishSession("completed","Timer completed",db.timer.deadline);
  if(db.timer.state==="break"&&db.breakState&&nowMs()>=db.breakState.endAt)finishBreak();
  updateTimerView();
 }
@@ -614,7 +816,7 @@ async function completePasswordSetup(){
      const localEnvelope=window.__pomoLocalEnvelope;
      encryptionSalt=b64ToBytes(localEnvelope.salt);encryptionKey=await deriveEncryptionKey(pass,encryptionSalt);
      const localData=await decryptData(localEnvelope);
-     db={...blankDb(),...localData,timer:{...blankDb().timer,...(localData.timer||{})}};
+     db={...blankDb(),...localData,timer:{...blankDb().timer,...(localData.timer||{})}};normalizeDbSessions();
      cloudReady=true;await ref.set(await encryptData(db));await saveEncryptedLocal(db);
    }else{
      const envelope=window.__pomoCloudEnvelope;
@@ -626,10 +828,10 @@ async function completePasswordSetup(){
      const localHasData=(localCandidate.sessions?.length||0)+(localCandidate.breaks?.length||0)>0;
      const remoteHasData=(remote.sessions?.length||0)+(remote.breaks?.length||0)>0;
      if(localHasData&&(!remoteHasData||safeNum(localCandidate.updatedAt,0)>safeNum(envelope.updatedAt,0))){
-       db={...blankDb(),...localCandidate,timer:{...blankDb().timer,...(localCandidate.timer||{})}};
+       db={...blankDb(),...localCandidate,timer:{...blankDb().timer,...(localCandidate.timer||{})}};normalizeDbSessions();
        cloudReady=true;await ref.set(await encryptData(db));await saveEncryptedLocal(db);
      }else{
-       db={...blankDb(),...remote,timer:{...blankDb().timer,...(remote.timer||{})}};
+       db={...blankDb(),...remote,timer:{...blankDb().timer,...(remote.timer||{})}};normalizeDbSessions();
        cloudReady=true;persist({cloud:false});hydrateInputs();
      }
    }
@@ -714,7 +916,7 @@ async function restoreDriveBackup(){
    const payload=await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
    const incoming=await decryptData(payload);
    if(!incoming||!Array.isArray(incoming.sessions))throw new Error("The Drive file is not a valid encrypted POMO Clock backup.");
-   db={...blankDb(),...incoming,timer:{...blankDb().timer,...incoming.timer}};
+   db={...blankDb(),...incoming,timer:{...blankDb().timer,...incoming.timer}};normalizeDbSessions();
    persist({cloud:false});hydrateInputs();renderAll();toast("Latest Google Drive backup restored");
  }catch(e){toast("Could not restore Drive backup: "+e.message.slice(0,95));}
 }
@@ -734,16 +936,26 @@ function initEvents(){
  $("stopwatchReset").addEventListener("click",resetStopwatch);
  $("startPauseBtn").addEventListener("click",()=>{
    const st=db.timer.state;
-   if(st==="running")pauseFocus();
+   if(st==="running")pauseFocus("manual");
    else if(st==="paused")resumeFocus();
    else if(st==="idle")startFocus(safeNum($("durationMinutes").value,60));
  });
  $("resetTimerBtn").addEventListener("click",()=>{
    stopAlarm();
-   if(db.timer.state==="running"||db.timer.state==="paused"){if(!confirm("End this active session and reset the timer?"))return;finishSession("interrupted","Manual reset");}
-   db.timer.state="idle";db.timer.remainingMs=safeNum($("durationMinutes").value,60)*60000;db.timer.deadline=null;db.timer.startedAt=null;db.timer.sessionId=null;persist();updateTimerView();toast("Timer reset");
+   if(db.timer.state==="running"||db.timer.state==="paused"){
+     if(!confirm("End this active session and reset the timer?"))return;
+     finishSession("interrupted","Manual reset");
+   }
+   if(db.timer.state==="break"&&db.breakState){
+     if(!confirm("End the active break and reset the timer?"))return;
+     const b=db.breakState,now=nowMs();b.actualEndAt=now;b.actualMinutes=Math.max(0,(now-b.startAt)/60000);b.status="ended by reset";b.manualEnd=true;db.breakState=null;
+     if(b.sessionId&&db.timer.sessionId===b.sessionId)finishSession("interrupted","Reset during scheduled break",now);
+     else endTimerToIdle();
+     if(db.breakSchedule&&db.breakSchedule.status==="started")db.breakSchedule.status="cancelled";
+   }
+   db.timer.state="idle";db.timer.remainingMs=safeNum($("durationMinutes").value,60)*60000;db.timer.deadline=null;db.timer.startedAt=null;db.timer.sessionId=null;db.timer.mode=null;db.timer.attemptId=null;stopAlarm();persist();updateTimerView();toast("Timer reset");
  });
- $("stopSessionBtn").addEventListener("click",()=>{if(confirm("End the current focus session now?"))cancelCurrentSession();});
+ $("stopSessionBtn").addEventListener("click",()=>{if(confirm("End this focus window now and save any remaining time for later recovery?"))finishSession("partial","Manually ended before target");});
  $("skipBreakBtn").addEventListener("click",()=>{if(db.breakState){if(confirm("End this break now and start the next focus session?"))finishBreak(true);}});
  $("applyDuration").addEventListener("click",()=>{
    const mins=Math.round(safeNum($("durationMinutes").value,60));if(mins<1||mins>240){toast("Choose a duration from 1 to 240 minutes.");return;}
@@ -764,7 +976,7 @@ function initEvents(){
  $("exportHistory").addEventListener("click",exportCsv);
  $("importJsonFile").addEventListener("change",e=>{if(e.target.files[0])importJsonFile(e.target.files[0]);e.target.value="";});
  $("connectDriveBtn").addEventListener("click",connectDrive);$("syncDriveBtn").addEventListener("click",()=>syncDriveBackup({daily:true}));$("restoreDriveBtn").addEventListener("click",restoreDriveBackup);$("disconnectDriveBtn").addEventListener("click",disconnectDrive);
- $("restoreLocalBtn").addEventListener("click",()=>{const idx=Number($("localSnapshotSelect").value),snap=db.backupSnapshots[idx];if(!snap||!snap.data){toast("Choose a valid snapshot.");return;}if(!confirm(`Restore local snapshot from ${snap.date}? Current data will be replaced.`))return;const history=db.backupSnapshots;db={...blankDb(),...snap.data,timer:{...blankDb().timer,...snap.data.timer},backupSnapshots:history};persist({cloud:false});hydrateInputs();renderAll();toast("Local snapshot restored");});
+ $("restoreLocalBtn").addEventListener("click",()=>{const idx=Number($("localSnapshotSelect").value),snap=db.backupSnapshots[idx];if(!snap||!snap.data){toast("Choose a valid snapshot.");return;}if(!confirm(`Restore local snapshot from ${snap.date}? Current data will be replaced.`))return;const history=db.backupSnapshots;db={...blankDb(),...snap.data,timer:{...blankDb().timer,...snap.data.timer},backupSnapshots:history};normalizeDbSessions();persist({cloud:false});hydrateInputs();renderAll();toast("Local snapshot restored");});
  $("googleClientId").value=localStorage.getItem(CLIENT_KEY)||"";
  window.addEventListener("beforeunload",()=>{if(db&&cloudReady)persist({cloud:false});});
  document.addEventListener("visibilitychange",()=>{if(!document.hidden){doTick();renderAnalytics();}});
@@ -772,10 +984,10 @@ function initEvents(){
 loadDb();
 const lastDur=safeNum(localStorage.getItem(DUR_KEY),60);
 if(!db.timer||!db.timer.duration)db.timer={...blankDb().timer,duration:lastDur,remainingMs:lastDur*60000};
-if(db.timer.state==="running"&&db.timer.deadline&&nowMs()>=db.timer.deadline){finalizeSession("completed","Timer completed while app was closed",db.timer.deadline);db.timer.state="idle";db.timer.sessionId=null;db.timer.deadline=null;db.timer.startedAt=null;db.timer.remainingMs=db.timer.duration*60000;}
+if(db.timer.sessionId&&db.timer.deadline&&nowMs()>=db.timer.deadline){closeAttemptAtDeadline(db.timer.deadline);}
 buildDial();buildStopwatchDial();loadStopwatch();hydrateInputs();initEvents();renderAll();updateStopwatchView();
 initializeSecureLayer();
-setInterval(()=>{if(cloudReady)doTick();},250);
+setInterval(()=>{if(db)doTick();},250);
 setInterval(()=>{if(db&&cloudReady){const day=fmtDateKey(new Date());if(db.lastLocalBackupDate!==day)persist();}},30000);
 setInterval(()=>{if(stopwatch.running)updateStopwatchView();},250);
 })();
