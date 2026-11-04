@@ -1,4 +1,4 @@
-# POMO Clock — Secure Firebase Edition (Session Recovery Fix v5.1)
+# POMO Clock — Secure Firebase Edition (Session Recovery Fix v5.2)
 
 A mobile-friendly physical-style Pomodoro clock with an Asia/Kolkata analog clock, counter-clockwise focus dial, scheduled breaks, editable session history, pause accounting, and daily/weekly/monthly analytics.
 
@@ -138,3 +138,11 @@ The v5.1 service-worker cache is versioned to force the browser to install the c
 - A previously active v5 recovery record is migrated in-place to the pause-excluded recovery model when the updated app loads; its focus segments and pause intervals are retained.
 
 The v5.1 build increments the service-worker cache to `pomo-clock-session-recovery-v6` so browsers replace the previously deployed v5 assets. Firebase configuration and Firestore rules are unchanged.
+
+
+## v5.2 recovery panel render fix
+
+- The live timer renderer now keeps total focused time and original target values in function scope, so the recovery right-side panel can finish rendering instead of stopping on a JavaScript scope error.
+- During recovery, the main panel reflects the same original session name, recovery status, exact countdown, read-only remaining-focus field, and total focus progress that appear in the history row.
+- The remaining-focus number input rounds upward to a whole minute so a partial minute is never cut short; the analog/digital countdown remains second-accurate. For a 15-minute target with exactly 8 minutes focused, recovery is 7 minutes.
+- The service-worker cache is incremented to `pomo-clock-session-recovery-v7` to ensure the fixed `app.js` is installed. Firebase configuration and Firestore rules remain unchanged.

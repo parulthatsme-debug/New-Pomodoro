@@ -188,6 +188,11 @@ function updateTimerView() {
  const t=db.timer, now=nowMs();
  let display="", pct=0, dialElapsedMs=0, hint="Set your duration, then start.";
  const s=getActiveSession();
+ // Keep the values needed by both timer and recovery panels in function scope.
+ // In v5.1 they were block-scoped inside the running/paused branch, which
+ // caused a ReferenceError before the right-side recovery controls rendered.
+ let target=Math.max(1,s?.targetDurationMs||safeNum(t.duration,60)*60000);
+ let focused=s?sessionFocusMs(s,now):elapsedMs(t,now);
  const recoveryMode=!!(s&&t.mode==="recovery"&&["running","paused","break"].includes(t.state));
  if(t.state==="running"&&recoveryMode&&sessionFocusMs(s,now)>=sessionTargetMs(s)){
    completeRecoveryAtTarget(now);return;
@@ -197,8 +202,9 @@ function updateTimerView() {
    return;
  }
  if(t.state==="running"||t.state==="paused") {
-   const remain=remainingMs(t,now), target=Math.max(1,s?.targetDurationMs||safeNum(t.duration,60)*60000);
-   const focused=s?sessionFocusMs(s,now):elapsedMs(t,now);
+   const remain=remainingMs(t,now);
+   target=Math.max(1,s?.targetDurationMs||safeNum(t.duration,60)*60000);
+   focused=s?sessionFocusMs(s,now):elapsedMs(t,now);
    display=mmss(remain);pct=focused/target;dialElapsedMs=focused;
    const left=Math.max(0,target-focused);
    if(recoveryMode){
