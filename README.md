@@ -1,4 +1,4 @@
-# POMO Clock — Secure Firebase Edition (setup build)
+# POMO Clock — Secure Firebase Edition (Session Recovery Fix v5.1)
 
 A mobile-friendly physical-style Pomodoro clock with an Asia/Kolkata analog clock, counter-clockwise focus dial, scheduled breaks, editable session history, pause accounting, and daily/weekly/monthly analytics.
 
@@ -114,3 +114,27 @@ Do not enter an OAuth client secret in the app. The Drive feature is optional; F
 - Session history remains one numbered row per original session. The expandable detail area shows each focus block, manual/scheduled pause, fixed-window end, waiting period before recovery, and each later recovery block in chronological order.
 - Focus analytics allocate tracked focus segments to the calendar date when the work actually occurred.
 - Recovery-attempt focus and pause totals are stored per attempt as well as in the original session totals.
+
+
+## v5 recovery behaviour
+
+- The original Pomodoro window remains fixed. Manual pauses during the original window still consume wall-clock window time and can leave the session Partial at its original end.
+- Resume Again opens a continuation attempt under the same session record and session number. It displays the session name and remaining focus minutes in the main timer panel.
+- Recovery is based on accumulated active focus, not a new wall-clock deadline. Pausing a recovery attempt does not consume the remaining focus time or cause the recovery window to expire.
+- Multiple pause/resume periods during recovery are recorded as separate timeline entries under the original session. The session becomes Completed only when total active focus reaches the original planned target.
+- Recovery duration shown in the main panel is read-only and reflects the remaining focus (rounded up to whole minutes); the progress bar and elapsed percentage remain based on total focus against the original target.
+- Scheduled breaks attached to a recovery session pause focus accounting and return to the same recovery attempt when the scheduled break finishes.
+
+The v5.1 service-worker cache is versioned to force the browser to install the corrected application assets. Firebase configuration and Firestore rules are unchanged.
+
+
+## v5.1 recovery pause and panel correction
+
+- Recovery attempts no longer receive a wall-clock deadline. Their countdown is calculated from the original session target minus the sum of all actual focus segments.
+- Pausing recovery closes the current focus segment and opens a pause interval under the same recovery-attempt ID. Resuming closes that pause interval and opens another focus segment under that same attempt. Multiple recovery pauses therefore accumulate in Session Pause and remain visible in the original session's timeline.
+- Time spent paused during recovery does not reduce the remaining focus amount and cannot trigger the original fixed-window end message. Recovery ends only when accumulated actual focus reaches the original planned target, or when the user explicitly ends/resets the session.
+- The main timer panel identifies **SESSION RECOVERY**, shows the original session name, displays a read-only **Remaining focus** field rounded up to whole minutes, and shows accumulated focus versus the original target and its percentage.
+- The original session's first fixed window is unchanged: its deadline still stays fixed, and pauses during that initial window can result in a Partial record at the original end.
+- A previously active v5 recovery record is migrated in-place to the pause-excluded recovery model when the updated app loads; its focus segments and pause intervals are retained.
+
+The v5.1 build increments the service-worker cache to `pomo-clock-session-recovery-v6` so browsers replace the previously deployed v5 assets. Firebase configuration and Firestore rules are unchanged.

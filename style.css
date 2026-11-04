@@ -156,3 +156,7 @@ body.auth-locked{overflow:hidden}
  .session-detail-summary span{grid-column:1/-1}
  .session-main-row td{vertical-align:top}
 }
+
+/* Recovery mode: the duration field becomes a read-only remaining-focus indicator. */
+.duration-input input:read-only{background:#f1f7f2;border-color:#c8dfd0;color:#225c43;font-weight:800;cursor:default}
+.duration-input button:disabled{opacity:.45;cursor:not-allowed}
