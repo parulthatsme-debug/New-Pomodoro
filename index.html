@@ -79,7 +79,7 @@
               <circle cx="250" cy="250" r="11" fill="#aeb8c4" stroke="#414b55" stroke-width="2"/>
             </g>
             <circle cx="250" cy="250" r="149" fill="none" stroke="#cfd5dc" stroke-width="1"/>
-            <text id="dialTimerText" x="250" y="348" text-anchor="middle" class="dial-timer-text" aria-label="Pomodoro countdown">60:00</text>
+            <text id="dialTimerText" x="250" y="348" text-anchor="middle" class="dial-timer-text" aria-label="Pomodoro countdown">120:00</text>
           </svg>
         </div>
         <div class="calendar-window" aria-label="Today's date">
@@ -95,7 +95,7 @@
 
     <div class="timer-control-panel">
       <div class="current-mode"><span class="mode-dot" id="modeDot"></span><div><div class="eyebrow" id="modeEyebrow">POMODORO SESSION</div><h2 id="modeTitle">Ready to focus?</h2></div></div>
-      <div class="timer-display" id="timerDisplay" aria-hidden="true">60:00</div>
+      <div class="timer-display" id="timerDisplay" aria-hidden="true">120:00</div>
       <div class="timer-progress-label"><span id="timerHint">Set your duration, then start.</span><span id="elapsedLabel">0% elapsed</span></div>
       <div class="timer-progress"><div id="timerProgress"></div></div>
       <div class="session-name-row">
@@ -104,7 +104,7 @@
       </div>
       <div class="duration-row">
         <label id="durationLabel" for="durationMinutes">Session duration</label>
-        <div class="duration-input"><input id="durationMinutes" type="number" min="1" max="240" value="60" inputmode="numeric"><span>min</span><button class="btn btn-outline btn-sm" id="applyDuration">Apply</button></div>
+        <div class="duration-input"><input id="durationMinutes" type="number" min="1" max="120" value="120" inputmode="numeric"><span>min</span><button class="btn btn-outline btn-sm" id="applyDuration">Apply</button></div>
       </div>
       <div class="break-elapsed-panel" id="breakElapsedPanel" aria-live="polite">
         <div class="break-elapsed-label"><span>BREAK ELAPSED</span><strong id="breakElapsedLabel">Not active</strong></div>

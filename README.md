@@ -1,12 +1,14 @@
-# POMO Clock — Secure Firebase Edition (Session Recovery Fix v5.2)
+# POMO Clock — Secure Firebase Edition (120-Minute Dial Update v5.4)
 
 A mobile-friendly physical-style Pomodoro clock with an Asia/Kolkata analog clock, counter-clockwise focus dial, scheduled breaks, editable session history, pause accounting, and daily/weekly/monthly analytics.
 
 ## Included app features
-- 60-minute default focus session; custom durations from 1–240 minutes.
-- Real clock hands move clockwise; focus progress moves counter-clockwise on a 60-minute dial.
+- v5.4: Analog focus dial redesigned to 00–120 minutes; one complete anticlockwise revolution equals 120 minutes. The previous 60-minute default migrates to 120 minutes while deliberate custom durations and existing session history are preserved.
+- 120-minute default focus session; custom durations from 1–120 minutes.
+- Real clock hands move clockwise; focus progress moves counter-clockwise on a 120-minute dial, with major labels every 10 minutes and intermediate marks every 5 minutes.
 - Scheduled 15-minute short and 60-minute long breaks. The date is automatic (Asia/Kolkata); enter only the time. A time already passed today rolls to tomorrow. Manual override remains available.
 - Session names can be entered before starting or changed while running; history also remains editable. Separate cumulative session-pause duration; net focus excludes pauses.
+- During a manually paused original fixed-window session, the visible countdown freezes at the pause value; the original wall-clock deadline remains fixed and can still close the session on time. Recovery countdowns also freeze when paused.
 - Session and break history, daily target, analytics charts, CSV and JSON export.
 - Forest / sage-green physical-clock design and responsive mobile layout. Compact daily metrics sit above an independent analog stopwatch.
 - Local browser persistence and daily local snapshots. The stopwatch keeps only its five most recent completed uses in browser-local temporary storage.
